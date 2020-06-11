@@ -21,6 +21,11 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2020 wchen130. All rights reserved.</string>
 	<key>OSBundleLibraries</key>
-	<dict/>
+    <dict>
+        <key>com.apple.kpi.bsd</key>
+        <string>18.7</string>
+        <key>com.apple.kpi.libkern</key>
+        <string>18.7</string>
+    </dict>
 </dict>
 </plist>
