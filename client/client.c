@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/errno.h>
 #include <sys/ioctl.h>
@@ -17,6 +19,11 @@
 
 #include "client.h"
 
+#ifndef LOG_PATH
+#define LOG_PATH "/tmp/kernel_hook.txt"
+#endif
+const char* log_path = LOG_PATH;
+
 #define HOOK_CTL_NAME   "com.wchen130.hook"
 
 #define SOCKOPT_SET_ENABLE     1
@@ -24,6 +31,18 @@
 #define SOCKOPT_SET_RESET      3
 
 #define SOCKOPT_GET_TEST       1
+#define SOCKOPT_GET_READ       2
+
+typedef struct entry {
+    // externalMethod
+    uint64_t* connection;
+    size_t    inputStructCnt;
+    size_t    outputStructCnt;
+    uint32_t  selector;
+    // function
+    unsigned int index;
+    int pid;
+} Entry;
 
 int main() {
     struct sockaddr_ctl addr;
@@ -54,19 +73,58 @@ int main() {
         exit(-1);
     }
     
-    uint64_t funcs[0xd5];
-    unsigned int len = 0xd5 * sizeof(uint64_t);
-    rc = getsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_GET_TEST, funcs, &len);
-    if (rc == 0) {
-        for (int i = 0; i < 0xd5; i++) {
-            printf("%d: 0x%llx\n", i, funcs[i]);
+//    uint64_t funcs[0xd5];
+//    unsigned int len = 0xd5 * sizeof(uint64_t);
+//    rc = getsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_GET_TEST, funcs, &len);
+//    if (rc == 0) {
+//        for (int i = 0; i < 0xd5; i++) {
+//            printf("%d: 0x%llx\n", i, funcs[i]);
+//        }
+//    }
+    Entry entries[512];
+    while (1) {
+        unsigned int len = 512 * sizeof(Entry);
+        // Enable Hooker
+        if (setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_ENABLE, NULL, 0)) {
+            printf("failed to enable!\n");
+        }
+        
+        char c = getc(stdin);
+        if (c == EOF) {
+            break;
+        }
+        getc(stdin); // read '\n'
+        
+        // Disable Hooker
+        if (setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_DISABLE, NULL, 0)) {
+            printf("failed to diable!\n");
+        }
+        
+        if (getsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_GET_READ, entries, &len)) {
+            printf("failed to get hook data!\n");
+        } else {
+            FILE *fp = fopen(log_path, "a");
+            size_t i = 0;
+            for ( ; i < len / sizeof(Entry); i++) {
+                printf("port: %p, selector: %d, inputStructCnt: %lu, outputStructCnt: %lu, id: %d, pid: %d\n",
+                       entries[i].connection, entries[i].selector, entries[i].inputStructCnt,
+                       entries[i].outputStructCnt, entries[i].index, entries[i].pid);
+                fprintf(fp, "{\"port\": %llu, \"selector\": %d, \"inputStructCnt\": %lu, \"outputStructCnt\": %lu, \"id\": %d, \"pid\": %d}\n",
+                        (uint64_t)entries[i].connection, entries[i].selector, entries[i].inputStructCnt,
+                        entries[i].outputStructCnt, entries[i].index, entries[i].pid);
+            }
+            if (i == 512) {
+                printf("Reach the max capability, please reduce the number of syscall!\n");
+            }
+            fclose(fp);
         }
     }
-    char buffer[0x100];
-    if (send(fd, buffer, 0x10, 0) == -1) {
-        perror("fail to send\n");
-    }
+//    char buffer[0x100];
+//    if (send(fd, buffer, 0x10, 0) == -1) {
+//        perror("fail to send\n");
+//    }
     
+    setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_DISABLE, NULL, 0);
     shutdown(fd, SHUT_RDWR);
     return 0;
 }

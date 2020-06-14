@@ -17,12 +17,13 @@
 
 typedef struct entry {
     // externalMethod
-    uint32_t connection;
-    uint32_t selector;
-    uint64_t *input;
-    uint64_t *output;
+    uint64_t* connection;
+    size_t    inputStructCnt;
+    size_t    outputStructCnt;
+    uint32_t  selector;
     // function
     unsigned int index;
+    int pid;
 } Entry;
 
 #define MAX_ENTRY  512

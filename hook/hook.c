@@ -11,6 +11,7 @@
 #include <sys/fcntl.h>
 #include <sys/vnode.h>
 #include <sys/kern_control.h>
+#include <sys/proc.h>
 
 #include "include.h"
 #include "gen.h"
@@ -87,12 +88,12 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
             unsigned int index = gLastIndex = gEntryIndex;
             gEntryIndex++;
             struct IOExternalMethodArguments *args = (struct IOExternalMethodArguments*) arg2;
-            entries[index].connection = (uint32_t) arg0;
+            entries[index].connection = (uint64_t *) arg0;
             entries[index].selector = (uint32_t) arg1;
-            entries[index].input = (uint64_t *) args->structureInput;
-            entries[index].output = args->structureOutput;
+            entries[index].inputStructCnt = args->structureInputSize;
+            entries[index].outputStructCnt = args->structureOutputSize;
             entries[index].index = -1;
-            printf("%d, %d, %p, %p\n", entries[index].connection, entries[index].selector, entries[index].input, entries[index].output);
+            entries[index].pid = proc_selfpid();
         } else {
             printf("[%s.kext] Exceed max capacity, disable it\n", DRIVER_NAME);
             gEnableHook = 0;
