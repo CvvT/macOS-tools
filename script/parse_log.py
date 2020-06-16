@@ -5,28 +5,19 @@ import os
 import sys
 import traceback
 
-class Type:
+def int2bytes(value, size):
+	ret = []
+	for i in range(size):
+		ret.append((value & 0xff))
+		value = value >> 8
+	return ret
+
+class Type(object):
 	def __init__(self, type, offset=0, size=0):
 		self.type = type
 		self.offset = offset
 		self.size = size
-
-	def type2ID(self, type):
-		if type == "buffer":
-			return 0
-		if type == "ptr":
-			return 1
-		if type == "struct":
-			return 2
-		raise Exception("unknown type %s" % type)
-
-	def id2Type(self, id):
-		if id == 0:
-			return "buffer"
-		if id == 1:
-			return "ptr"
-		if id == 2:
-			return "struct"
+		self.values = []
 
 	def repr(self, indent=0):
 		ret = " "*indent + self.type + " " + str(self.size) + "\n"
@@ -37,6 +28,8 @@ class Type:
 		if "offset" in data:  # it is a pre-loaded model
 			offset = data["offset"]
 		type = data["type"]
+		if type == "none":
+			return None
 		if type == "ptr" or (isPtr and "ptr" in data):
 			return PtrType(data, offset)
 		if type == "buffer":
@@ -44,6 +37,9 @@ class Type:
 		elif type == "struct":
 			return StructType(data, offset)
 		raise Exception("unknown type")
+
+	def getData(self):
+		return None
 
 	def toJson(self):
 		ret = {
@@ -69,9 +65,10 @@ class PtrType(Type):
 			self.ref = Type.construct(data["ref"], 0, isPtr=False)
 		else:
 			self.ref = Type.construct(data, 0, isPtr=False)
+			self.values.append(int(data["ptr"], 16))
 
 		if "optional" in data:
-			self.optional = True
+			self.optional = data["optional"]
 		else:
 			self.optional = False
 
@@ -87,16 +84,30 @@ class PtrType(Type):
 			print(self.subtype, other.subtype)
 			raise Exception("different subtype for pointer")
 		# refine reference
-		ret = self.ref.refine(other.ref)
-		if ret is None:
-			raise Exception("return none ref")
-		self.ref = ret
+		self.ref = self.ref.refine(other.ref)
 		return self
 
-	def filter(self, frame):
+	def simplify(self, model):
+		if model.type == "ptr":
+			self.ref = self.ref.simplify(model.ref)
+			return self
+		if model.type == "buffer":
+			if model.size != self.size:
+				raise Exception("simplify ptr with wrong size")
+			return BufferType({"data": self.getData()}, self.offset)
+		raise Exception("simplify ptr with struct")
+
+	def visit(self, ctx, func):
+		func(ctx, self)
 		if self.ref:
-			frame = self.ref.filter(frame)
-		return frame
+			ctx.path.append(0)
+			self.ref.visit(ctx, func)
+			ctx.path.pop()
+
+	def getData(self):
+		if len(self.values) > 0:
+			return int2bytes(self.values[0], 8)
+		return int2bytes(0, 8)
 
 	def repr(self, indent=0):
 		ret = " "*indent + self.subtype + " " + self.type + " " + str(self.size)
@@ -125,6 +136,7 @@ class BufferType(Type):
 		# pointer can be optional
 		if other.type == "ptr":
 			if self.isNull():
+				other.optional = True
 				return other
 			# else:
 			# 	print(self.data)
@@ -134,6 +146,15 @@ class BufferType(Type):
 			self.data = self.data[:self.size]
 		return self
 
+	def simplify(self, model):
+		if model.type == "ptr":
+			return PtrType({"type": "none", "ptr": "0x0", "optional": True, "subtype": model.subtype}, self.offset)
+		self.data = self.data[:model.size]
+		return self
+
+	def visit(self, ctx, func):
+		func(ctx, self)
+
 	def isNull(self):
 		if len(self.data) != 8:
 			return False
@@ -142,10 +163,13 @@ class BufferType(Type):
 				return False
 		return True
 
-	def filter(self, frame):
-		# print(frame, self.size)
-		frame["data"] = frame["data"][:self.size]
-		return frame
+	def getData(self):
+		return self.data
+
+	def repr(self, indent=0):
+		ret = " "*indent + self.type + " " + str(self.size) + \
+			" " + str(self.getData()) + "\n"
+		return ret
 
 	def toJson(self):
 		ret = super(BufferType, self).toJson()
@@ -200,17 +224,43 @@ class StructType(Type):
 		self.size = fields[-1].offset + fields[-1].size
 		return self
 
-	def filter(self, frame):
-		# fast path
-		# print(frame)
-		if len(self.fields) == len(frame["fields"]):
-			new_fields = []
-			for i in range(len(self.fields)):
-				new_fields.append(self.fields[i].filter(frame["fields"][i]))
-			frame["fields"] = new_fields
-			return frame
+	def simplify(self, model):
+		others = []
+		if model.type != "struct":
+			others.append(model)
+		else:
+			others = model.fields
 
-		return frame
+		fields = []
+		l = r = 0
+		while r < len(others):
+			ltype, rtype = self.fields[l], others[r]
+			if ltype.size == rtype.size:
+				fields.append(ltype.simplify(rtype))
+			else:
+				if ltype.size > rtype.size:
+					self.split(l, rtype.size)
+				else:
+					raise Exception("ltype has larger size")
+				continue
+			l += 1
+			r += 1
+
+		self.fields = fields
+		self.size = fields[-1].offset + fields[-1].size
+		if model.type != "struct":
+			if len(self.fields) != 1:
+				raise Exception("Error when simplifying strcuture to other type")
+			return self.fields[0]
+			
+		return self
+
+	def visit(self, ctx, func):
+		func(ctx, self)
+		for i in range(len(self.fields)):
+			ctx.path.append(i)
+			self.fields[i].visit(ctx, func)
+			ctx.path.pop()
 
 	def repr(self, indent=0):
 		ret = " "*indent + self.type + " " + str(self.size) + "\n"
@@ -231,6 +281,7 @@ class Interface:
 		self.outputStructSize = frame["outputStructSize"]
 
 		self.inputStruct = Type.construct(frame["inputStruct"])
+		self.outputStruct = BufferType({"data": frame["outputStruct"]}, 0)
 
 	def refine(self, other):
 		if self.selector != other.selector or \
@@ -241,10 +292,21 @@ class Interface:
 			raise Exception("unmatched interface")
 		self.inputStruct.refine(other.inputStruct)
 
-	def filter(self, frame):
-		if self.inputStruct:
-			frame["inputStruct"] = self.inputStruct.filter(frame["inputStruct"])
-		return frame
+	def simplify(self, model):
+		if self.selector != model.selector or \
+			self.inputStructSize != model.inputStructSize or \
+			self.outputStructSize != model.outputStructSize:
+			print(self.repr())
+			print(model.repr())
+			raise Exception("unmatched interface")
+		self.inputStruct = self.inputStruct.simplify(model.inputStruct)
+		self.outputStruct = self.outputStruct.simplify(model.outputStruct)
+
+	def visit(self, ctx, func):
+		ctx.arg = "inputStruct"
+		self.inputStruct.visit(ctx, func)
+		ctx.arg = "outputStruct"
+		self.outputStruct.visit(ctx, func)
 
 	def repr(self):
 		ret = "selector: %s\n" % self.selector
@@ -258,30 +320,28 @@ class Interface:
 			"selector": self.selector,
 			"inputStructSize": self.inputStructSize,
 			"outputStructSize": self.outputStructSize,
-			"inputStruct": self.inputStruct.toJson()
+			"inputStruct": self.inputStruct.toJson(),
+			"outputStruct": self.outputStruct.toJson()
 		}
 		return ret
 
 
 def gen_model(frames, interface=None):
 	if len(frames) == 0:
-		return None
+		return interface
 
 	if interface is None:
 		interface = Interface(frames[0])
-		# print(frames[0])
-		# print(interface.repr())
-		# print()
 		frames = frames[1:]
 
 	for frame in frames:
-		# print(frame)
 		other = Interface(frame)
-		# print(other.repr())
 		interface.refine(other)
 
-		# print(interface.repr())
-		# print()
+	# repeat it (double check)
+	for frame in frames:
+		other = Interface(frame)
+		interface.refine(other)
 
 	return interface
 
@@ -293,7 +353,7 @@ def load_model(filepath):
 		model = json.load(f)
 		interfaces = {}
 		for k, v in model.items():
-			interfaces[k] = Interface(v)
+			interfaces[int(k)] = Interface(v)
 		return interfaces
 
 
@@ -321,8 +381,8 @@ def extract_model(frames, filepath="sample/interface_type.json"):
 			model[index] = interface
 		print("\n")
 
-	# with open(filepath, "w") as f:
-	# 	json.dump(dict((k, v.toJson()) for k, v in model.items()), f)
+	with open(filepath, "w") as f:
+		json.dump(dict((k, v.toJson()) for k, v in model.items()), f, indent=2)
 
 	return model
 
@@ -433,16 +493,12 @@ def main(kernellog, userlog):
 	frames, invalid = merge_log(kernellog, userlog)
 	print("total invalid frames: %d" % invalid)
 	model = extract_model(frames)
-	# filtered_frames = []
-	# for frame in frames:
-	# 	index = frame["id"]
-	# 	interface = model[index]
-	# 	frame = interface.filter(frame)
-	# 	filtered_frames.append(frame)
-	# with open("sample/output.txt", "w") as f:
-	# 	for frame in filtered_frames:
-	# 		f.write(json.dumps(frame))
-	# 		f.write("\n")
+
+	with open("sample/output.txt", "a") as f:
+		f.write("-----------------------------------\n")
+		for frame in frames:
+			f.write(json.dumps(frame))
+			f.write("\n")
 
 def fix(kernellog):
 	with open(kernellog, "r") as inputf, open("sample/output.txt", "w") as outputf:
