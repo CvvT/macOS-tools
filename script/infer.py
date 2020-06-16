@@ -20,28 +20,6 @@ class Syscall(object):
 #  2. dependence value can be constant through out an entire log.
 #  3. 
 
-class Arg(object):
-	def __init__(self, name, type):
-		self.name = name
-		self.type = type
-
-class ConstArg(Arg):
-	def __init__(self, value):
-		super(ConstArg, self).__init__("const")
-		self.value = value
-
-class PtrArg(Arg):
-	def __init__(self, type):
-		super(PtrArg, self).__init__("ptr")
-
-class BufferArg(Arg):
-	def __init__(self):
-		super(BufferArg, self).__init__("buffer")
-
-class StructArg(Arg):
-	def __init__(self):
-		super(StructArg, self).__init__("struct")
-
 class InterfaceCall(object):
 	def __init__(self, interface, group, port):
 		self.interface = interface
@@ -66,6 +44,11 @@ class ResourceType(Type):
 		ret = " "*indent + self.type + " " + str(self.size) + \
 			" " + str(self.getData()) + "\n"
 		return ret
+
+class ConstType(ResourceType):
+	def __init__(self, data, offset):
+		super(ConstType, self).__init__(data, offset)
+		self.type = "const"
 
 class Path(object):
 	def __init__(self):
@@ -93,6 +76,14 @@ class Path(object):
 			return False
 		return True
 
+	def equal(self, path):
+		if not self.match(path):
+			return False
+		return self.type.getData() == path.type.getData()
+
+	def getData(self):
+		return self.type.getData()
+
 	def repr(self):
 		ret = "Path:\n"
 		ret += "  path: " + str(self.path) + "\n"
@@ -100,6 +91,26 @@ class Path(object):
 		if self.type:
 			ret += self.type.repr(indent=2)
 		return ret
+
+class Dependence(object):
+	def __init__(self, outPath, inPath):
+		self.outPath = outPath
+		self.inPath = inPath
+
+	def contained(self, dependences):
+		for dependence in dependences:
+			if self.match(dependence):
+				return dependence
+		return None
+
+	def match(self, dependence):
+		if self.outPath.match(dependence.outPath) and \
+			self.inPath.match(dependence.inPath):
+			return True
+		return False
+
+	def repr(self):
+		return "Out " + self.outPath.repr() + "\nIn " + self.inPath.repr() + "\n"
 
 class Context(object):
 	def __init__(self):
@@ -111,16 +122,15 @@ def genServiceOpen():
 	print("syz_IOServiceOpen$%s(name ptr[in, string[\"%s\"]], port ptr[out, %s_port])" % \
 		(PREFIX, SERVICE, PREFIX))
 
+def generate_model(model, potential_dependences, potential_constants):
+	genServiceOpen()
+	for group, interface in model.items():
+		interface.genModel(PREFIX, group)
+
 def findBytes(big, small):
 	a = ''.join([chr(x) for x in big])
 	b = ''.join([chr(x) for x in small])
 	return a.find(b)
-
-def contains(dependences, dep):
-	for dependence in dependences:
-		if dependence[0].match(dep[0]) and dependence[1].match(dep[1]):
-			return True
-	return False
 
 def visit(model, all_inputs, func):
 	for inputs in all_inputs:
@@ -177,15 +187,16 @@ def analyze(model, all_inputs):
 										new_path.type = ResourceType(data[offset:offset+path.type.size], offset)
 										new_path.path = list(ctx.path)
 										new_path.index = inter.group
-										new_dep = (path, new_path)
+										new_dep = Dependence(path, new_path)
 										if path.index == new_path.index:
 											print(path.repr())
 											print(new_path.repr())
 											print(group, inter.group)
 											raise Exception("identical index")
 										# De-duplicate
-										if not contains(dependences, new_dep):
-											dependences.append((path, new_path))
+										# if not contains(dependences, new_dep):
+										if not new_dep.contained(dependences):
+											dependences.append(new_dep)
 
 					inter.interface.visit(ctx, search)
 					if inter.group not in candidates:
@@ -198,27 +209,86 @@ def analyze(model, all_inputs):
 					# 	print(dep[1].repr())
 					# 	print()
 
+	potential_dependences = []
 	for group, items in candidates.items():
 		if len(items) == 0:
 			continue
 
 		hypothesis = items[0]
-		# for each in hypothesis:
-		# 	if each[0].index == each[1].index:
-		# 		raise Exception("identical index")
-		# 	print(each[0].repr())
-		# 	print(each[1].repr())
+		values = {}
+		for dep in hypothesis:
+			values[dep] = set()
+
 		for dependences in items[1:]:
-			hypothesis = [x for x in hypothesis if contains(dependences, x)]
+			new_hypothesis = []
+			for x in hypothesis:
+				dep = x.contained(dependences)
+				if dep:
+					# double check the dependence is not a constant
+					new_hypothesis.append(x)
+					new_data = str(dep.outPath.getData())
+					values[x].add(new_data)
+			hypothesis = new_hypothesis
+			# hypothesis = [x for x in hypothesis if x.contained(dependences)]
 			if len(hypothesis) == 0:
 				break
 
-		print("find %d dependences for group %d" % (len(hypothesis), group))
+		# print("find %d dependences for group %d" % (len(hypothesis), group))
 		for dep in hypothesis:
-			print(dep[0].repr())
-			print(dep[1].repr())
+			if len(values[dep]) > 1:  # not constant
+				potential_dependences.append(dep)
+				# print(dep.repr())
+				# print(values[dep])
+
+	print("find %d dependences" % len(potential_dependences))
+	for dep in potential_dependences:
+		print(dep.repr())
+
+
+	# dectect constant
+	candidates = {}
+	for inputs in all_inputs:
+		# separetely analyze each log file
+		for pid, interfaces in inputs.items():
+			# separetely analyze each process
+			for inter in interfaces:
+				ctx = Context()
+				constants = []
+				def search_const(ctx, type):
+					if ctx.arg == "outputStruct":
+						return
+					if type.type == "buffer":
+						if type.size == 0:
+							return
+						data = type.getData()
+						offset = 0
+						while offset < type.size:
+							new_path = Path()
+							new_path.type = ConstType(data[offset:offset+4], offset)
+							new_path.path = list(ctx.path)
+							new_path.index = inter.group
+							offset += 4
+							constants.append(new_path)
+
+				inter.interface.visit(ctx, search_const)
+				if inter.group not in candidates:
+					candidates[inter.group] = constants
+				else:
+					new_constants = []
+					for const in candidates[inter.group]:
+						for each in constants:
+							if const.equal(each):
+								new_constants.append(const)
+								break
+					candidates[inter.group] = new_constants
+
+	for group, constants in candidates.items():
+		print("find %d candidates for group %d" % (len(constants), group))
+		for each in constants:
+			print(each.repr())
 			print()
 
+	generate_model(model, potential_dependences, candidates)
 
 def main(filepath="sample/interface_type.json"):
 	model = load_model(filepath)
