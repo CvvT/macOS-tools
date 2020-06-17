@@ -12,6 +12,39 @@ def int2bytes(value, size):
 		value = value >> 8
 	return ret
 
+def Size2Type(size):
+	if size == 1:
+		return "int8"
+	if size == 2:
+		return "int16"
+	if size == 4:
+		return "int32"
+	if size == 8:
+		return "int64"
+	return "array[int8, %d]" % size
+
+# TODO: add PREFIX
+TotalStruct = 0
+TotalFlags = 0
+TotalUnion = 0
+def assignStruct():
+	global TotalStruct
+	ret = "struct%d" % TotalStruct
+	TotalStruct += 1
+	return ret
+
+def assignFlag():
+	global TotalFlags
+	ret = "flag%d" % TotalFlags
+	TotalFlags += 1
+	return ret
+
+def assignUnion():
+	global TotalUnion
+	ret = "union%d" % TotalUnion
+	TotalUnion += 1
+	return ret
+
 class Type(object):
 	def __init__(self, type, offset=0, size=0):
 		self.type = type
@@ -48,7 +81,6 @@ class Type(object):
 			"size": self.size
 		}
 		return ret
-
 
 class PtrType(Type):
 	def __init__(self, data, offset):
@@ -104,6 +136,23 @@ class PtrType(Type):
 			self.ref.visit(ctx, func)
 			ctx.path.pop()
 
+	def genModel(self, group, path, dependences, constants, types, dir):
+		path.append(0)
+		typename, _ = self.ref.genModel(group, path, dependences, constants, types, dir)
+		path.pop()
+		definition = None
+		if self.optional:
+			unionName = assignUnion()
+			definition = "%s [\n" % unionName
+			definition += "    field0  const [0, intptr]\n"
+			definition += "    field1  ptr[%s, %s]\n" % (dir, typename)
+			definition += "]"
+			print(definition)
+			typename = unionName
+		else:
+			typename = "ptr[%s, %s]" % (dir, typename)
+		return typename, definition
+
 	def getData(self):
 		if len(self.values) > 0:
 			return int2bytes(self.values[0], 8)
@@ -150,10 +199,85 @@ class BufferType(Type):
 		if model.type == "ptr":
 			return PtrType({"type": "none", "ptr": "0x0", "optional": True, "subtype": model.subtype}, self.offset)
 		self.data = self.data[:model.size]
+		self.size = len(self.data)
 		return self
 
 	def visit(self, ctx, func):
 		func(ctx, self)
+
+	def genModel(self, group, path, dependences, constants, types, dir):
+		def assignResource(path):
+			if path not in types:
+				typename = "connection%d" % len(types)
+				types[path] = typename
+				return typename
+			return types[path]
+
+		if self.size == 0:
+			return "const[0, int64]", None
+
+		ret = []
+		start, offset = 0, 0
+		while offset < self.size:
+			found = False
+			for dep in dependences:
+				if dir == "out" and dep.outPath.match(path) and \
+					dep.outPath.type.offset == offset and \
+					dep.outPath.index == group:
+					if offset > start:
+						ret.append(Size2Type(offset-start))
+					typename = assignResource(dep.outPath)
+					ret.append(typename)
+					offset += dep.outPath.type.size
+					start = offset
+					found = True
+					break
+				if dir == "in" and dep.inPath.match(path) and \
+					dep.inPath.type.offset == offset and \
+					dep.inPath.index == group:
+					if offset > start:
+						ret.append(Size2Type(offset-start))
+					typename = assignResource(dep.outPath)
+					ret.append(typename)
+					offset += dep.inPath.type.size
+					start = offset
+					found = True
+					break
+			if dir == "in":
+				for each, values in constants.items():
+					if each.match(path) and each.type.offset == offset:
+						if offset > start:
+							ret.append(Size2Type(offset-start))
+						if len(values) == 1:  # constant
+							ret.append("const[%d, %s]" % (list(values)[0], Size2Type(each.type.size)))
+						elif len(values) < 5:
+							if len(values) == 2 and (0 in values) and (1 in values):
+								ret.append("bool%d" % (each.type.size*8))
+							else:
+								typename = assignFlag()
+								print("%s = %s" % (typename, str(values)))
+								ret.append("flags[%s, %s]" % (typename, Size2Type(each.type.size)))
+						else:
+							ret.append(Size2Type(each.type.size))
+						offset += each.type.size
+						start = offset
+						found = True
+						break
+			if not found:
+				offset += 1
+		if offset > start:
+			ret.append(Size2Type(offset-start))
+
+		if len(ret) == 1:
+			return ret[0], None
+		typename = assignStruct()
+		definition = "%s {\n" % typename
+		for i in range(len(ret)):
+			definition += "    field%d  %s\n" % (i, ret[i])
+		definition += "}"
+		print(definition)
+		return typename, definition
+
 
 	def isNull(self):
 		if len(self.data) != 8:
@@ -252,7 +376,7 @@ class StructType(Type):
 			if len(self.fields) != 1:
 				raise Exception("Error when simplifying strcuture to other type")
 			return self.fields[0]
-			
+
 		return self
 
 	def visit(self, ctx, func):
@@ -261,6 +385,22 @@ class StructType(Type):
 			ctx.path.append(i)
 			self.fields[i].visit(ctx, func)
 			ctx.path.pop()
+
+	def genModel(self, group, path, dependences, constants, types, dir):
+		ret = []
+		for i in range(len(self.fields)):
+			path.append(i)
+			typename, _ = self.fields[i].genModel(group, path, dependences, constants, types, dir)
+			ret.append(typename)
+			path.pop()
+
+		typename = assignStruct()
+		definition = "%s {\n" % typename
+		for i in range(len(ret)):
+			definition += "    field%d  %s\n" % (i, ret[i])
+		definition += "}"
+		print(definition)
+		return typename, definition
 
 	def repr(self, indent=0):
 		ret = " "*indent + self.type + " " + str(self.size) + "\n"
@@ -307,6 +447,29 @@ class Interface:
 		self.inputStruct.visit(ctx, func)
 		ctx.arg = "outputStruct"
 		self.outputStruct.visit(ctx, func)
+
+	def genModel(self, prefix, group, dependences, constants, types):
+		template = "syz_IOConnectCallMethod$%s_Group%d(port %s_port, selector const[%d], input const[0]," + \
+			" inputCnt const[0], inputStruct %s, inputStructCnt const[%d], " + \
+			"output const[0], outputCnt ptr[in, const[0, int32]], outputStruct %s, "+ \
+			"outputStructCnt ptr[in, const[%d, int64]])"
+		
+		if self.outputStructSize == 0:
+			outputStructType = "const[0]"
+		else:
+			path = []
+			outputStructType, _ = self.outputStruct.genModel(group, path, dependences, dict(), types, "out")
+			outputStructType = "ptr[out, %s]" % outputStructType
+
+		if self.inputStructSize == 0:
+			inputStructType = "const[0]"
+		else:
+			path = []
+			inputStructType, _ = self.inputStruct.genModel(group, path, dependences, constants, types, "in")
+
+		template = template % (prefix, group, prefix, self.selector, inputStructType, \
+			self.inputStructSize, outputStructType, self.outputStructSize)
+		print(template)
 
 	def repr(self):
 		ret = "selector: %s\n" % self.selector

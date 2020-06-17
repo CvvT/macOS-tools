@@ -3,7 +3,7 @@
 import sys
 import json
 
-from parse_log import load_model, Interface, Type
+from parse_log import load_model, Interface, Type, Size2Type
 
 PREFIX = "bluetooth"
 SERVICE = "IOBluetoothHCIController"
@@ -41,7 +41,7 @@ class ResourceType(Type):
 		return self.data
 
 	def repr(self, indent=0):
-		ret = " "*indent + self.type + " " + str(self.size) + \
+		ret = " "*indent + self.type + " " + str(self.offset) + " " + str(self.size) + \
 			" " + str(self.getData()) + "\n"
 		return ret
 
@@ -63,6 +63,14 @@ class Path(object):
 		self.path.pop()
 
 	def match(self, path):
+		if isinstance(path, list):
+			if len(self.path) != len(path):
+				return False
+			for i in range(len(self.path)):
+				if self.path[i] != path[i]:
+					return False
+			return True
+
 		if self.index != path.index:
 			return False
 		if len(self.path) != len(path.path):
@@ -91,6 +99,12 @@ class Path(object):
 		if self.type:
 			ret += self.type.repr(indent=2)
 		return ret
+
+	def __hash__(self):
+		return hash((str(self.path), self.index, self.type.offset, self.type.size))
+
+	def __eq__(self, other):
+		return self.match(other)
 
 class Dependence(object):
 	def __init__(self, outPath, inPath):
@@ -124,8 +138,14 @@ def genServiceOpen():
 
 def generate_model(model, potential_dependences, potential_constants):
 	genServiceOpen()
+	types = {}
 	for group, interface in model.items():
-		interface.genModel(PREFIX, group)
+		relevant = [dep for dep in potential_dependences if dep.inPath.index == group or dep.outPath.index == group]
+		# constants = potential_constants[group] if group in potential_constants else dict()
+		interface.genModel(PREFIX, group, relevant, potential_constants, types)
+
+	for path, name in types.items():
+		print("resource %s[%s]" % (name, Size2Type(path.type.size)))
 
 def findBytes(big, small):
 	a = ''.join([chr(x) for x in big])
@@ -245,7 +265,7 @@ def analyze(model, all_inputs):
 		print(dep.repr())
 
 
-	# dectect constant
+	# dectect constant/flag
 	candidates = {}
 	for inputs in all_inputs:
 		# separetely analyze each log file
@@ -253,7 +273,7 @@ def analyze(model, all_inputs):
 			# separetely analyze each process
 			for inter in interfaces:
 				ctx = Context()
-				constants = []
+				# constants = []
 				def search_const(ctx, type):
 					if ctx.arg == "outputStruct":
 						return
@@ -268,25 +288,32 @@ def analyze(model, all_inputs):
 							new_path.path = list(ctx.path)
 							new_path.index = inter.group
 							offset += 4
-							constants.append(new_path)
+							if new_path not in candidates:
+								candidates[new_path] = set()
+							candidates[new_path].add(int.from_bytes(new_path.type.getData(), "little"))
+							# constants.append(new_path)
 
 				inter.interface.visit(ctx, search_const)
-				if inter.group not in candidates:
-					candidates[inter.group] = constants
-				else:
-					new_constants = []
-					for const in candidates[inter.group]:
-						for each in constants:
-							if const.equal(each):
-								new_constants.append(const)
-								break
-					candidates[inter.group] = new_constants
+				# if inter.group not in candidates:
+				# 	candidates[inter.group] = constants
+				# else:
+				# 	new_constants = []
+				# 	for const in candidates[inter.group]:
+				# 		for each in constants:
+				# 			if const.equal(each):
+				# 				new_constants.append(const)
+				# 				break
+				# 	candidates[inter.group] = new_constants
 
-	for group, constants in candidates.items():
-		print("find %d candidates for group %d" % (len(constants), group))
-		for each in constants:
-			print(each.repr())
-			print()
+	# print("Candidates: %d" % len(candidates))
+	# for path, constants in candidates.items():
+	# 	# print("find %d candidates for group %d" % (len(constants), group))
+	# 	if path.index == 0:
+	# 		print(path.repr())
+	# 		print(constants)
+			# for each in constants:
+			# 	print(each.repr())
+			# 	print()
 
 	generate_model(model, potential_dependences, candidates)
 

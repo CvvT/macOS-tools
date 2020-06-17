@@ -3,4 +3,8 @@ DerivedData/
 client/client
 
 hook/gen.h
+sample/
 
+# python
+*.pyc
+__pycache__/
