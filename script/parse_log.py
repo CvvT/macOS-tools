@@ -130,11 +130,13 @@ class PtrType(Type):
 		raise Exception("simplify ptr with struct")
 
 	def visit(self, ctx, func):
-		func(ctx, self)
+		if func(ctx, self):
+			return True  # stop
 		if self.ref:
 			ctx.path.append(0)
-			self.ref.visit(ctx, func)
+			ret = self.ref.visit(ctx, func)
 			ctx.path.pop()
+			return ret
 
 	def genModel(self, group, path, dependences, constants, types, dir):
 		path.append(0)
@@ -203,7 +205,7 @@ class BufferType(Type):
 		return self
 
 	def visit(self, ctx, func):
-		func(ctx, self)
+		return func(ctx, self)
 
 	def genModel(self, group, path, dependences, constants, types, dir):
 		def assignResource(path):
@@ -255,7 +257,7 @@ class BufferType(Type):
 								ret.append("bool%d" % (each.type.size*8))
 							else:
 								typename = assignFlag()
-								print("%s = %s" % (typename, str(values)))
+								print("%s = %s" % (typename, ", ".join([str(x) for x in values])))
 								ret.append("flags[%s, %s]" % (typename, Size2Type(each.type.size)))
 						else:
 							ret.append(Size2Type(each.type.size))
@@ -380,11 +382,14 @@ class StructType(Type):
 		return self
 
 	def visit(self, ctx, func):
-		func(ctx, self)
+		if func(ctx, self):
+			return True  # stop
 		for i in range(len(self.fields)):
 			ctx.path.append(i)
-			self.fields[i].visit(ctx, func)
+			ret = self.fields[i].visit(ctx, func)
 			ctx.path.pop()
+			if ret:
+				return True  # stop
 
 	def genModel(self, group, path, dependences, constants, types, dir):
 		ret = []

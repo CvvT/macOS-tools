@@ -26,6 +26,14 @@ class InterfaceCall(object):
 		self.group = group
 		self.port = port
 
+	def toJson(self):
+		ret = {
+			"group": self.group,
+			"port": self.port,
+			"interface": self.interface.toJson()
+		}
+		return ret
+
 	def repr(self):
 		ret = "group: %d\n" % self.group
 		ret += "port: %d\n" % self.port
@@ -146,6 +154,71 @@ def generate_model(model, potential_dependences, potential_constants):
 
 	for path, name in types.items():
 		print("resource %s[%s]" % (name, Size2Type(path.type.size)))
+
+def extractData(interface, path, dir):
+	ret = None
+	def search_path(ctx, type):
+		if dir == "in" and ctx.arg == "outputStruct":
+			return
+		if dir == "out" and ctx.arg == "inputStruct":
+			return
+
+		if type.type == "buffer":
+			if path.match(ctx.path):
+				ret = type.getData()[path.type.offset:path.type.offset+path.type.size]
+				return True
+	ctx = Context()
+	interface.visit(ctx, search_path)
+	return ret
+
+# Give a certain input, find the first input on which it depends.
+def find_dependence(interfaces, index, potential_dependences):
+	itfCall = interfaces[index]
+	relevant = [dep for dep in potential_dependences if dep.inPath.index == itfCall.group]
+	if len(relevant) == 0:
+		return -1
+
+	ret = index
+	for dep in relevant:
+		last = index - 1
+		data = extractData(itfCall.interface, dep.inPath, "in")
+		while last >= 0:
+			itf = interfaces[last]
+			if itf.group == dep.outPath.index:
+				new_data = extractData(itf.interface, dep.outPath, "out")
+				if data == new_data:
+					break
+			last -= 1
+		if last != -1 and last < ret:
+			ret = last
+
+	return ret if ret != index else -1
+
+
+def get_testcase(interfaces, start, end, potential_dependences):
+	index = end
+	while index >= start:
+		last = find_dependence(interfaces, index, potential_dependences)
+		if last != -1 and last < start:
+			start = last
+		index -= 1
+	return start, end
+
+def generate_testcase(all_inputs, potential_dependences):
+	num = 0
+	for inputs in all_inputs:
+		for pid, interfaces in inputs.items():
+			last = len(interfaces) - 1
+			while last >= 0:
+				start, end = get_testcase(interfaces, last, last, potential_dependences)
+				print("find a testcase from %d to %d" % (start, end))
+				with open("sample/testcases/%d" % num, "w") as f:
+					for i in range(start, end+1):
+						json.dump(interfaces[i].toJson(), f)
+						f.write("\n")
+				num += 1
+				last = start - 1
+
 
 def findBytes(big, small):
 	a = ''.join([chr(x) for x in big])
@@ -316,6 +389,7 @@ def analyze(model, all_inputs):
 			# 	print()
 
 	generate_model(model, potential_dependences, candidates)
+	generate_testcase(all_inputs, potential_dependences)
 
 def main(filepath="sample/interface_type.json"):
 	model = load_model(filepath)
