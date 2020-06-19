@@ -146,7 +146,7 @@ class PtrType(Type):
 		if self.optional:
 			unionName = assignUnion()
 			definition = "%s [\n" % unionName
-			definition += "    field0  const [0, intptr]\n"
+			definition += "    field0  const[0, intptr]\n"
 			definition += "    field1  ptr[%s, %s]\n" % (dir, typename)
 			definition += "]"
 			print(definition)
@@ -245,6 +245,10 @@ class BufferType(Type):
 					start = offset
 					found = True
 					break
+			if found:
+				# TODO: dep may overlap with constant
+				continue
+
 			if dir == "in":
 				for each, values in constants.items():
 					if each.match(path) and each.type.offset == offset:

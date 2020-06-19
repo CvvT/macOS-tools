@@ -3,14 +3,10 @@
 import sys
 import json
 
-from parse_log import load_model, Interface, Type, Size2Type
+from parse_log import load_model, Interface, Type, Size2Type, int2bytes, PtrType
 
 PREFIX = "bluetooth"
 SERVICE = "IOBluetoothHCIController"
-
-class Syscall(object):
-	def __init__(self):
-		pass
 
 # TODO: We should filter the log to reduce disk consumption as much as possible, but
 # the priority is not high for now. The most important thing to do now it to detect 
@@ -39,6 +35,34 @@ class InterfaceCall(object):
 		ret += "port: %d\n" % self.port
 		ret += self.interface.repr()
 		return ret
+
+	def toArgs(self):
+		# Convert it data that can be later transformed into testcase by syzkaller
+		ret = {
+			"group": "syz_IOConnectCallMethod$%s_Group%d" % (PREFIX, self.group),
+		}
+		interface = self.interface.toJson()
+		# kern_return_t IOConnectCallMethod(mach_port_t connection, uint32_t selector, const uint64_t *input, 
+		# uint32_t inputCnt, const void *inputStruct, size_t inputStructCnt, uint64_t *output, uint32_t *outputCnt, 
+		# void *outputStruct, size_t *outputStructCnt);
+		args = []
+		args.append(self.port)
+		args.append(interface["selector"])
+		args.append(0)  # Null Pointer
+		args.append(0)  # 0 size
+		args.append(interface["inputStruct"])
+		args.append(interface["inputStructSize"])
+		args.append(0)  # Null Pointer
+		args.append(PtrType({"type": "ptr", "ref": {"type": "buffer", "offset": 0, "data": [0, 0, 0, 0]}}, 0).toJson())
+		if interface["outputStructSize"] > 0:
+			args.append(PtrType({"type": "ptr", "ref": interface["outputStruct"]}, 0).toJson())
+		else:
+			args.append(0)
+		args.append(PtrType({"type": "ptr", "ref": {"type": "buffer", "offset": 0, \
+			"data": int2bytes(interface["outputStructSize"], 8)}}, 0).toJson())
+		ret["args"] = args
+		return ret
+
 
 class ResourceType(Type):
 	def __init__(self, data, offset):
@@ -138,11 +162,30 @@ class Context(object):
 	def __init__(self):
 		self.path = []
 		self.arg = None
+		self.ret = None
 
 def genServiceOpen():
 	print("resource %s_port[io_connect_t]" % PREFIX)
 	print("syz_IOServiceOpen$%s(name ptr[in, string[\"%s\"]], port ptr[out, %s_port])" % \
 		(PREFIX, SERVICE, PREFIX))
+
+def genServiceOpenJson(port):
+	args = []
+	args.append(PtrType({"type": "ptr", "ref": {"type": "buffer", "data": [ord(x) for x in SERVICE]}}, 0).toJson())
+	args.append(PtrType({"type": "ptr", "ref": {"type": "buffer", "offset": 0, \
+			"data": int2bytes(port, 8)}}, 0).toJson())
+	ret = {
+		"group": "syz_IOServiceOpen$%s" % PREFIX,
+		"args": args
+	}
+	return ret
+
+def genServiceCloseJson(port):
+	ret = {
+		"group": "syz_IOServiceClose",
+		"args": [port]
+	}
+	return ret
 
 def generate_model(model, potential_dependences, potential_constants):
 	genServiceOpen()
@@ -156,7 +199,6 @@ def generate_model(model, potential_dependences, potential_constants):
 		print("resource %s[%s]" % (name, Size2Type(path.type.size)))
 
 def extractData(interface, path, dir):
-	ret = None
 	def search_path(ctx, type):
 		if dir == "in" and ctx.arg == "outputStruct":
 			return
@@ -165,11 +207,11 @@ def extractData(interface, path, dir):
 
 		if type.type == "buffer":
 			if path.match(ctx.path):
-				ret = type.getData()[path.type.offset:path.type.offset+path.type.size]
+				ctx.ret = type.getData()[path.type.offset:path.type.offset+path.type.size]
 				return True
 	ctx = Context()
 	interface.visit(ctx, search_path)
-	return ret
+	return ctx.ret
 
 # Give a certain input, find the first input on which it depends.
 def find_dependence(interfaces, index, potential_dependences):
@@ -212,10 +254,16 @@ def generate_testcase(all_inputs, potential_dependences):
 			while last >= 0:
 				start, end = get_testcase(interfaces, last, last, potential_dependences)
 				print("find a testcase from %d to %d" % (start, end))
-				with open("sample/testcases/%d" % num, "w") as f:
+				with open("sample/testcases/%d.prog" % num, "w") as f:
+					port_num = interfaces[end].port
+					json.dump(genServiceOpenJson(port_num), f)
+					f.write("\n")
 					for i in range(start, end+1):
-						json.dump(interfaces[i].toJson(), f)
+						if interfaces[i].port != port_num:
+							raise Exception("Unmatched port number")
+						json.dump(interfaces[i].toArgs(), f)
 						f.write("\n")
+					json.dump(genServiceCloseJson(port_num), f)
 				num += 1
 				last = start - 1
 
@@ -364,29 +412,8 @@ def analyze(model, all_inputs):
 							if new_path not in candidates:
 								candidates[new_path] = set()
 							candidates[new_path].add(int.from_bytes(new_path.type.getData(), "little"))
-							# constants.append(new_path)
 
 				inter.interface.visit(ctx, search_const)
-				# if inter.group not in candidates:
-				# 	candidates[inter.group] = constants
-				# else:
-				# 	new_constants = []
-				# 	for const in candidates[inter.group]:
-				# 		for each in constants:
-				# 			if const.equal(each):
-				# 				new_constants.append(const)
-				# 				break
-				# 	candidates[inter.group] = new_constants
-
-	# print("Candidates: %d" % len(candidates))
-	# for path, constants in candidates.items():
-	# 	# print("find %d candidates for group %d" % (len(constants), group))
-	# 	if path.index == 0:
-	# 		print(path.repr())
-	# 		print(constants)
-			# for each in constants:
-			# 	print(each.repr())
-			# 	print()
 
 	generate_model(model, potential_dependences, candidates)
 	generate_testcase(all_inputs, potential_dependences)
