@@ -251,7 +251,8 @@ class BufferType(Type):
 
 			if dir == "in":
 				for each, values in constants.items():
-					if each.match(path) and each.type.offset == offset:
+					if each.match(path) and each.type.offset == offset and \
+						each.index == group:
 						if offset > start:
 							ret.append(Size2Type(offset-start))
 						if len(values) == 1:  # constant

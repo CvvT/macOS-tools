@@ -192,8 +192,8 @@ def generate_model(model, potential_dependences, potential_constants):
 	types = {}
 	for group, interface in model.items():
 		relevant = [dep for dep in potential_dependences if dep.inPath.index == group or dep.outPath.index == group]
-		# constants = potential_constants[group] if group in potential_constants else dict()
-		interface.genModel(PREFIX, group, relevant, potential_constants, types)
+		constants = dict((path, values) for path, values in potential_constants.items() if path.index == group)
+		interface.genModel(PREFIX, group, relevant, constants, types)
 
 	for path, name in types.items():
 		print("resource %s[%s]" % (name, Size2Type(path.type.size)))
@@ -253,7 +253,7 @@ def generate_testcase(all_inputs, potential_dependences):
 			last = len(interfaces) - 1
 			while last >= 0:
 				start, end = get_testcase(interfaces, last, last, potential_dependences)
-				print("find a testcase from %d to %d" % (start, end))
+				print("find a testcase from %d to %d: %d" % (start, end, num))
 				with open("sample/testcases/%d.prog" % num, "w") as f:
 					port_num = interfaces[end].port
 					json.dump(genServiceOpenJson(port_num), f)
@@ -381,9 +381,9 @@ def analyze(model, all_inputs):
 				# print(dep.repr())
 				# print(values[dep])
 
-	print("find %d dependences" % len(potential_dependences))
-	for dep in potential_dependences:
-		print(dep.repr())
+	# print("find %d dependences" % len(potential_dependences))
+	# for dep in potential_dependences:
+	# 	print(dep.repr())
 
 
 	# dectect constant/flag
