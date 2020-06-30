@@ -1,6 +1,7 @@
 
 DerivedData/
 client/client
+client/libhook.dylib
 
 hook/gen.h
 sample/

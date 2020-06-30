@@ -12,6 +12,8 @@
 #include <sys/vnode.h>
 #include <sys/kern_control.h>
 #include <sys/proc.h>
+#include <kern/locks.h>
+#include <i386/proc_reg.h>
 
 #include "include.h"
 #include "gen.h"
@@ -29,6 +31,57 @@ struct kern_ctl_reg gKeCtlReg = {0};
 kern_ctl_ref gKeCtlRef = NULL;
 unsigned int gKeCtrlConnected = 0;
 unsigned int gkeCtlSacUnit = 0;
+
+//
+// CR0 and mutex lock
+//
+static unsigned long cr0;
+static lck_mtx_t *cr0_lock;
+lck_grp_t *glock_group;
+
+//
+// Disable the write protection bit in CR0 register
+//
+static void disable_write_protection() {
+    lck_mtx_lock(cr0_lock);
+    unsigned long tmp_cr0 = cr0 = get_cr0();
+    tmp_cr0 &= ~CR0_WP;
+    set_cr0(tmp_cr0);
+}
+
+//
+// Enable the write protection bit in CR0 register
+//
+static void enable_write_protection() {
+    unsigned long tmp_cr0 = cr0;
+    set_cr0(tmp_cr0);
+    cr0 = 0;
+    lck_mtx_unlock(cr0_lock);
+}
+
+static kern_return_t init_mutex() {
+    glock_group = lck_grp_alloc_init(HOOK_CTL_NAME, LCK_GRP_ATTR_NULL);
+    if (!glock_group)
+        return KERN_NO_SPACE;
+    
+    cr0_lock = lck_mtx_alloc_init(glock_group, LCK_ATTR_NULL);
+    if (!cr0_lock)
+        return KERN_NO_SPACE;
+    
+    return KERN_SUCCESS;
+}
+
+static void free_mutex() {
+    if (cr0_lock && glock_group) {
+        lck_mtx_free(cr0_lock, glock_group);
+        cr0_lock = NULL;
+    }
+    
+    if (glock_group) {
+        lck_grp_free(glock_group);
+        glock_group = NULL;
+    }
+}
 
 #define SOCKOPT_SET_ENABLE     1
 #define SOCKOPT_SET_DISABLE    2
@@ -73,6 +126,37 @@ static errno_t getHookEntries(void *data, size_t* len) {
 }
 
 //
+// IOMemoryDescriptor *
+// IOMemoryDescriptor::withAddressRange(mach_vm_address_t address,
+//     mach_vm_size_t length,
+//     IOOptionBits   options,
+//     task_t         task)
+//
+static long withAddressRangeStub(volatile long arg0, volatile long arg1, volatile long arg2,
+                                 volatile long arg3, volatile long arg4, volatile long arg5,
+                                 volatile long arg6, volatile long arg7, volatile long arg8,
+                                 volatile long arg9) {
+    if (gEnableHook) {
+#if DO_LOG
+        printf("[%s.kext] withAddressRange ptr: 0x%lx, size: %ld, opt: %ld\n", DRIVER_NAME, arg0, arg1, arg2);
+#endif
+        if (entries[gLastIndex].pid == proc_selfpid()) {
+            unsigned int index = entries[gLastIndex].num_ptr;
+            if (index < MAX_PTR) {
+                uint64_t data = ENCODE_PTR(arg0, arg1, arg2);
+                entries[gLastIndex].ptrs[index] = data;
+                entries[gLastIndex].num_ptr = index + 1;
+            } else {
+                printf("[%s.kext] Exceed max capacity for ptr, disable it\n", DRIVER_NAME);
+                gEnableHook = 0;
+            }
+        }
+    }
+    return gWithAddressRange.originFunc(arg0, arg1, arg2, arg3, arg4, arg5, arg6,
+                                        arg7, arg8, arg9);
+}
+
+//
 // virtual IOReturn externalMethod(this, uint32_t selector, IOExternalMethodArguments *arguments,
 //   IOExternalMethodDispatch *dispatch, OSObject *target, void *reference);
 //
@@ -95,7 +179,7 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
             entries[index].index = -1;
             entries[index].pid = proc_selfpid();
         } else {
-            printf("[%s.kext] Exceed max capacity, disable it\n", DRIVER_NAME);
+            printf("[%s.kext] Exceed max capacity for entry, disable it\n", DRIVER_NAME);
             gEnableHook = 0;
         }
     }
@@ -104,10 +188,13 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
 }
 
 static errno_t hook_initialize(vm_address_t base) {
+    kern_return_t status = KERN_SUCCESS;
     // prepare the hooker
     register_hook_func();
     
-    // FIXME: Make sure the address has write permission.
+    disable_interrupts();
+    disable_write_protection();
+    
     // Hook function table
     vm_address_t routine_ptr = base + ROUTINES_OFFSET;
     for (int i = 0; i < ROUTINES_NUM; i++, routine_ptr += ROUTINES_STRIDE) {
@@ -120,21 +207,68 @@ static errno_t hook_initialize(vm_address_t base) {
     gExternalMethod.originFunc = *(syscall_t*)externalMethod;
     gExternalMethod.hookFunc = &externalMethodStub;
     *(syscall_t*)externalMethod = gExternalMethod.hookFunc;
-    return KERN_SUCCESS;
+    
+    // Hook all library calls to withAddressRange
+    vm_address_t org_withAddressRange = 0;
+    for (int i = 0; i < sizeof(Offset2WithAddressRange) / sizeof(uint32_t); i++) {
+        vm_address_t patch_addr = base + Offset2WithAddressRange[i];
+        // FIXME: Here we assume the offset is of 4 bytes
+        uint32_t offset = *(uint32_t*)patch_addr;
+        vm_address_t withAddressRange = patch_addr + 4 + offset;
+        if (org_withAddressRange == 0) {
+            org_withAddressRange = withAddressRange;
+        } else if (org_withAddressRange != withAddressRange) {
+            printf("[%s.kext] Unmatched address for withAddressRange", DRIVER_NAME);
+            status = KERN_FAILURE;
+            break;
+        }
+        vm_address_t target = (vm_address_t)&withAddressRangeStub;
+        vm_address_t off = target - (patch_addr + 4);
+        *(uint32_t*)patch_addr = (uint32_t)off;
+#if DO_LOG
+//        printf("[%s.kext] WithAddressRange: 0x%lx 0x%lx, off: 0x%x\n", DRIVER_NAME, withAddressRange, target, off);
+#endif
+    }
+    gWithAddressRange.originFunc = (syscall_t)org_withAddressRange;
+    gWithAddressRange.hookFunc = &withAddressRangeStub;
+    
+    enable_write_protection();
+    enable_interrupts();
+    
+    return status;
 }
 
 static void hook_recover() {
     if (tgtKext == NULL) return;
     
-    // FIXME: Make sure the address has write permission
+    disable_interrupts();
+    disable_write_protection();
+    
     vm_address_t routine_ptr = tgtKext->address + ROUTINES_OFFSET;
     for (int i = 0; i < ROUTINES_NUM; i++, routine_ptr += ROUTINES_STRIDE) {
-        *(syscall_t*)routine_ptr = gHookers[i].originFunc;
+        if (gHookers[i].originFunc != 0)
+            *(syscall_t*)routine_ptr = gHookers[i].originFunc;
     }
     
     // recover vtable
-    vm_address_t externalMethod = tgtKext->address + HCI_EXTERNALMETHOD_OFFSET;
-    *(syscall_t*)externalMethod = gExternalMethod.originFunc;
+    if (gExternalMethod.originFunc != 0) {
+        vm_address_t externalMethod = tgtKext->address + HCI_EXTERNALMETHOD_OFFSET;
+        *(syscall_t*)externalMethod = gExternalMethod.originFunc;
+    }
+    
+    // recover withAddressRange
+    if (gWithAddressRange.originFunc != 0) {
+        for (int i = 0; i < sizeof(Offset2WithAddressRange) / sizeof(uint32_t); i++) {
+            vm_address_t patch_addr = tgtKext->address + Offset2WithAddressRange[i];
+            // FIXME: Here we assume the offset is of 4 bytes
+            vm_address_t off = (vm_address_t)gWithAddressRange.originFunc - (patch_addr + 4);
+            *(uint32_t*)patch_addr = (uint32_t)off;
+        }
+    }
+    
+    
+    enable_write_protection();
+    enable_interrupts();
 }
 
 static void reset_entry() {
@@ -240,8 +374,12 @@ void kernelControl_deregister() {
 
 kern_return_t hook_start(kmod_info_t * ki, void *d)
 {
+    kern_return_t status = KERN_SUCCESS;
     printf("[%s.kext] Hook kext has started.\n", DRIVER_NAME);
     kernelControl_register();
+    if ((status = init_mutex()) != KERN_SUCCESS) {
+        goto fail;
+    }
     
     //
     // Dump the kernel module list
@@ -266,7 +404,7 @@ kern_return_t hook_start(kmod_info_t * ki, void *d)
 
         if (!strcmp(TARGET_KEXT, kmod_item->name)) {
             tgtKext = kmod_item;
-            hook_initialize(kmod_item->address);
+            status = hook_initialize(kmod_item->address);
             break;
         }
         
@@ -276,8 +414,15 @@ kern_return_t hook_start(kmod_info_t * ki, void *d)
     
     if (kmod_item == 0) {
         printf("[%s.kext] Failed to find the target!!\n", DRIVER_NAME);
+        status = KERN_FAILURE;
     }
-    return KERN_SUCCESS;
+    
+fail:
+    if (status != KERN_SUCCESS) {
+        free_mutex();
+        hook_stop(ki, d);
+    }
+    return status;
 }
 
 kern_return_t hook_stop(kmod_info_t *ki, void *d)

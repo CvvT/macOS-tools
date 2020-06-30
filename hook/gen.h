@@ -1,13 +1,453 @@
 //
-//  gen.h
+//  gen.h: It should be auto-generated.
 //  hook
 //
-//  Created by 陈伟腾 on 6/10/20.
+//  Created by Weiteng Chen on 6/10/20.
 //  Copyright © 2020 wchen130. All rights reserved.
 //
 
 #ifndef gen_h
 #define gen_h
 
+#include "include.h"
+
+#define ROUTINES_OFFSET 0x9b660
+#define ROUTINES_NUM    0xd5
+#define ROUTINES_STRIDE 0x18
+
+#define HCI_EXTERNALMETHOD_OFFSET  0x9ad90
+
+uint32_t Offset2WithAddressRange[] = {0x112dd, 0x11c0f, 0x2e78e, 0x2ed9f, 0x3a49c, 0x3b3eb};
+
+DeclareStub(0)
+DeclareStub(1)
+DeclareStub(2)
+DeclareStub(3)
+DeclareStub(4)
+DeclareStub(5)
+DeclareStub(6)
+DeclareStub(7)
+DeclareStub(8)
+DeclareStub(9)
+DeclareStub(10)
+DeclareStub(11)
+DeclareStub(12)
+DeclareStub(13)
+DeclareStub(14)
+DeclareStub(15)
+DeclareStub(16)
+DeclareStub(17)
+DeclareStub(18)
+DeclareStub(19)
+DeclareStub(20)
+DeclareStub(21)
+DeclareStub(22)
+DeclareStub(23)
+DeclareStub(24)
+DeclareStub(25)
+DeclareStub(26)
+DeclareStub(27)
+DeclareStub(28)
+DeclareStub(29)
+DeclareStub(30)
+DeclareStub(31)
+DeclareStub(32)
+DeclareStub(33)
+DeclareStub(34)
+DeclareStub(35)
+DeclareStub(36)
+DeclareStub(37)
+DeclareStub(38)
+DeclareStub(39)
+DeclareStub(40)
+DeclareStub(41)
+DeclareStub(42)
+DeclareStub(43)
+DeclareStub(44)
+DeclareStub(45)
+DeclareStub(46)
+DeclareStub(47)
+DeclareStub(48)
+DeclareStub(49)
+DeclareStub(50)
+DeclareStub(51)
+DeclareStub(52)
+DeclareStub(53)
+DeclareStub(54)
+DeclareStub(55)
+DeclareStub(56)
+DeclareStub(57)
+DeclareStub(58)
+DeclareStub(59)
+DeclareStub(60)
+DeclareStub(61)
+DeclareStub(62)
+DeclareStub(63)
+DeclareStub(64)
+DeclareStub(65)
+DeclareStub(66)
+DeclareStub(67)
+DeclareStub(68)
+DeclareStub(69)
+DeclareStub(70)
+DeclareStub(71)
+DeclareStub(72)
+DeclareStub(73)
+DeclareStub(74)
+DeclareStub(75)
+DeclareStub(76)
+DeclareStub(77)
+DeclareStub(78)
+DeclareStub(79)
+DeclareStub(80)
+DeclareStub(81)
+DeclareStub(82)
+DeclareStub(83)
+DeclareStub(84)
+DeclareStub(85)
+DeclareStub(86)
+DeclareStub(87)
+DeclareStub(88)
+DeclareStub(89)
+DeclareStub(90)
+DeclareStub(91)
+DeclareStub(92)
+DeclareStub(93)
+DeclareStub(94)
+DeclareStub(95)
+DeclareStub(96)
+DeclareStub(97)
+DeclareStub(98)
+DeclareStub(99)
+DeclareStub(100)
+DeclareStub(101)
+DeclareStub(102)
+DeclareStub(103)
+DeclareStub(104)
+DeclareStub(105)
+DeclareStub(106)
+DeclareStub(107)
+DeclareStub(108)
+DeclareStub(109)
+DeclareStub(110)
+DeclareStub(111)
+DeclareStub(112)
+DeclareStub(113)
+DeclareStub(114)
+DeclareStub(115)
+DeclareStub(116)
+DeclareStub(117)
+DeclareStub(118)
+DeclareStub(119)
+DeclareStub(120)
+DeclareStub(121)
+DeclareStub(122)
+DeclareStub(123)
+DeclareStub(124)
+DeclareStub(125)
+DeclareStub(126)
+DeclareStub(127)
+DeclareStub(128)
+DeclareStub(129)
+DeclareStub(130)
+DeclareStub(131)
+DeclareStub(132)
+DeclareStub(133)
+DeclareStub(134)
+DeclareStub(135)
+DeclareStub(136)
+DeclareStub(137)
+DeclareStub(138)
+DeclareStub(139)
+DeclareStub(140)
+DeclareStub(141)
+DeclareStub(142)
+DeclareStub(143)
+DeclareStub(144)
+DeclareStub(145)
+DeclareStub(146)
+DeclareStub(147)
+DeclareStub(148)
+DeclareStub(149)
+DeclareStub(150)
+DeclareStub(151)
+DeclareStub(152)
+DeclareStub(153)
+DeclareStub(154)
+DeclareStub(155)
+DeclareStub(156)
+DeclareStub(157)
+DeclareStub(158)
+DeclareStub(159)
+DeclareStub(160)
+DeclareStub(161)
+DeclareStub(162)
+DeclareStub(163)
+DeclareStub(164)
+DeclareStub(165)
+DeclareStub(166)
+DeclareStub(167)
+DeclareStub(168)
+DeclareStub(169)
+DeclareStub(170)
+DeclareStub(171)
+DeclareStub(172)
+DeclareStub(173)
+DeclareStub(174)
+DeclareStub(175)
+DeclareStub(176)
+DeclareStub(177)
+DeclareStub(178)
+DeclareStub(179)
+DeclareStub(180)
+DeclareStub(181)
+DeclareStub(182)
+DeclareStub(183)
+DeclareStub(184)
+DeclareStub(185)
+DeclareStub(186)
+DeclareStub(187)
+DeclareStub(188)
+DeclareStub(189)
+DeclareStub(190)
+DeclareStub(191)
+DeclareStub(192)
+DeclareStub(193)
+DeclareStub(194)
+DeclareStub(195)
+DeclareStub(196)
+DeclareStub(197)
+DeclareStub(198)
+DeclareStub(199)
+DeclareStub(200)
+DeclareStub(201)
+DeclareStub(202)
+DeclareStub(203)
+DeclareStub(204)
+DeclareStub(205)
+DeclareStub(206)
+DeclareStub(207)
+DeclareStub(208)
+DeclareStub(209)
+DeclareStub(210)
+DeclareStub(211)
+DeclareStub(212)
+
+void register_hook_func() {
+    // corresponds to DeclareStub, the number must match.
+    RegisterStub(0);
+    RegisterStub(1);
+    RegisterStub(2);
+    RegisterStub(3);
+    RegisterStub(4);
+    RegisterStub(5);
+    RegisterStub(6);
+    RegisterStub(7);
+    RegisterStub(8);
+    RegisterStub(9);
+    RegisterStub(10);
+    RegisterStub(11);
+    RegisterStub(12);
+    RegisterStub(13);
+    RegisterStub(14);
+    RegisterStub(15);
+    RegisterStub(16);
+    RegisterStub(17);
+    RegisterStub(18);
+    RegisterStub(19);
+    RegisterStub(20);
+    RegisterStub(21);
+    RegisterStub(22);
+    RegisterStub(23);
+    RegisterStub(24);
+    RegisterStub(25);
+    RegisterStub(26);
+    RegisterStub(27);
+    RegisterStub(28);
+    RegisterStub(29);
+    RegisterStub(30);
+    RegisterStub(31);
+    RegisterStub(32);
+    RegisterStub(33);
+    RegisterStub(34);
+    RegisterStub(35);
+    RegisterStub(36);
+    RegisterStub(37);
+    RegisterStub(38);
+    RegisterStub(39);
+    RegisterStub(40);
+    RegisterStub(41);
+    RegisterStub(42);
+    RegisterStub(43);
+    RegisterStub(44);
+    RegisterStub(45);
+    RegisterStub(46);
+    RegisterStub(47);
+    RegisterStub(48);
+    RegisterStub(49);
+    RegisterStub(50);
+    RegisterStub(51);
+    RegisterStub(52);
+    RegisterStub(53);
+    RegisterStub(54);
+    RegisterStub(55);
+    RegisterStub(56);
+    RegisterStub(57);
+    RegisterStub(58);
+    RegisterStub(59);
+    RegisterStub(60);
+    RegisterStub(61);
+    RegisterStub(62);
+    RegisterStub(63);
+    RegisterStub(64);
+    RegisterStub(65);
+    RegisterStub(66);
+    RegisterStub(67);
+    RegisterStub(68);
+    RegisterStub(69);
+    RegisterStub(70);
+    RegisterStub(71);
+    RegisterStub(72);
+    RegisterStub(73);
+    RegisterStub(74);
+    RegisterStub(75);
+    RegisterStub(76);
+    RegisterStub(77);
+    RegisterStub(78);
+    RegisterStub(79);
+    RegisterStub(80);
+    RegisterStub(81);
+    RegisterStub(82);
+    RegisterStub(83);
+    RegisterStub(84);
+    RegisterStub(85);
+    RegisterStub(86);
+    RegisterStub(87);
+    RegisterStub(88);
+    RegisterStub(89);
+    RegisterStub(90);
+    RegisterStub(91);
+    RegisterStub(92);
+    RegisterStub(93);
+    RegisterStub(94);
+    RegisterStub(95);
+    RegisterStub(96);
+    RegisterStub(97);
+    RegisterStub(98);
+    RegisterStub(99);
+    RegisterStub(100);
+    RegisterStub(101);
+    RegisterStub(102);
+    RegisterStub(103);
+    RegisterStub(104);
+    RegisterStub(105);
+    RegisterStub(106);
+    RegisterStub(107);
+    RegisterStub(108);
+    RegisterStub(109);
+    RegisterStub(110);
+    RegisterStub(111);
+    RegisterStub(112);
+    RegisterStub(113);
+    RegisterStub(114);
+    RegisterStub(115);
+    RegisterStub(116);
+    RegisterStub(117);
+    RegisterStub(118);
+    RegisterStub(119);
+    RegisterStub(120);
+    RegisterStub(121);
+    RegisterStub(122);
+    RegisterStub(123);
+    RegisterStub(124);
+    RegisterStub(125);
+    RegisterStub(126);
+    RegisterStub(127);
+    RegisterStub(128);
+    RegisterStub(129);
+    RegisterStub(130);
+    RegisterStub(131);
+    RegisterStub(132);
+    RegisterStub(133);
+    RegisterStub(134);
+    RegisterStub(135);
+    RegisterStub(136);
+    RegisterStub(137);
+    RegisterStub(138);
+    RegisterStub(139);
+    RegisterStub(140);
+    RegisterStub(141);
+    RegisterStub(142);
+    RegisterStub(143);
+    RegisterStub(144);
+    RegisterStub(145);
+    RegisterStub(146);
+    RegisterStub(147);
+    RegisterStub(148);
+    RegisterStub(149);
+    RegisterStub(150);
+    RegisterStub(151);
+    RegisterStub(152);
+    RegisterStub(153);
+    RegisterStub(154);
+    RegisterStub(155);
+    RegisterStub(156);
+    RegisterStub(157);
+    RegisterStub(158);
+    RegisterStub(159);
+    RegisterStub(160);
+    RegisterStub(161);
+    RegisterStub(162);
+    RegisterStub(163);
+    RegisterStub(164);
+    RegisterStub(165);
+    RegisterStub(166);
+    RegisterStub(167);
+    RegisterStub(168);
+    RegisterStub(169);
+    RegisterStub(170);
+    RegisterStub(171);
+    RegisterStub(172);
+    RegisterStub(173);
+    RegisterStub(174);
+    RegisterStub(175);
+    RegisterStub(176);
+    RegisterStub(177);
+    RegisterStub(178);
+    RegisterStub(179);
+    RegisterStub(180);
+    RegisterStub(181);
+    RegisterStub(182);
+    RegisterStub(183);
+    RegisterStub(184);
+    RegisterStub(185);
+    RegisterStub(186);
+    RegisterStub(187);
+    RegisterStub(188);
+    RegisterStub(189);
+    RegisterStub(190);
+    RegisterStub(191);
+    RegisterStub(192);
+    RegisterStub(193);
+    RegisterStub(194);
+    RegisterStub(195);
+    RegisterStub(196);
+    RegisterStub(197);
+    RegisterStub(198);
+    RegisterStub(199);
+    RegisterStub(200);
+    RegisterStub(201);
+    RegisterStub(202);
+    RegisterStub(203);
+    RegisterStub(204);
+    RegisterStub(205);
+    RegisterStub(206);
+    RegisterStub(207);
+    RegisterStub(208);
+    RegisterStub(209);
+    RegisterStub(210);
+    RegisterStub(211);
+    RegisterStub(212);
+}
 
 #endif /* gen_h */

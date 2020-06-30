@@ -42,6 +42,8 @@ typedef struct entry {
     // function
     unsigned int index;
     int pid;
+    unsigned int num_ptr;
+    uint64_t ptrs[16];
 } Entry;
 
 int main() {
@@ -81,9 +83,9 @@ int main() {
 //            printf("%d: 0x%llx\n", i, funcs[i]);
 //        }
 //    }
-    Entry entries[512];
+    Entry entries[256];
     while (1) {
-        unsigned int len = 512 * sizeof(Entry);
+        unsigned int len = 256 * sizeof(Entry);
         // Enable Hooker
         if (setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_ENABLE, NULL, 0)) {
             printf("failed to enable!\n");
@@ -109,11 +111,19 @@ int main() {
                 printf("port: %p, selector: %d, inputStructCnt: %lu, outputStructCnt: %lu, id: %d, pid: %d\n",
                        entries[i].connection, entries[i].selector, entries[i].inputStructCnt,
                        entries[i].outputStructCnt, entries[i].index, entries[i].pid);
-                fprintf(fp, "{\"port\": %llu, \"selector\": %d, \"inputStructCnt\": %lu, \"outputStructCnt\": %lu, \"id\": %d, \"pid\": %d}\n",
+                fprintf(fp, "{\"port\": %llu, \"selector\": %d, \"inputStructCnt\": %lu, \"outputStructCnt\": %lu, \"id\": %d, \"pid\": %d, ",
                         (uint64_t)entries[i].connection, entries[i].selector, entries[i].inputStructCnt,
                         entries[i].outputStructCnt, entries[i].index, entries[i].pid);
+                fprintf(fp, "\"ptrs\": [");
+                for (unsigned int j = 0; j < entries[i].num_ptr; j++) {
+                    if (j == 0)
+                        fprintf(fp, "%llu", entries[i].ptrs[j]);
+                    else
+                        fprintf(fp, ", %llu", entries[i].ptrs[j]);
+                }
+                fprintf(fp, "]}\n");
             }
-            if (i == 512) {
+            if (i == 256) {
                 printf("Reach the max capability, please reduce the number of syscall!\n");
             }
             fclose(fp);

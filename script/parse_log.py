@@ -644,7 +644,9 @@ def merge_log(kernellog, userlog):
 				frame["pid"] = pid
 				frame["id"] = ent["id"]
 				frame["port_addr"] = ent["port"]
-				if (int(frame["ret"], 16) >> 26 == 0) and ent["id"] != -1:
+				# if (int(frame["ret"], 16) == 0) and \
+				if (int(frame["ret"], 16) >> 26 == 0) and \
+					ent["id"] != -1:
 					outputs.append(frame)
 				else:
 					# print(frame["ret"], ent["id"])
