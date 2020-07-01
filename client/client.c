@@ -17,34 +17,104 @@
 #include <sys/kern_control.h>
 #include <sys/kern_event.h>
 
-#include "client.h"
+#include "../hook/common.h"
 
 #ifndef LOG_PATH
 #define LOG_PATH "/tmp/kernel_hook.txt"
 #endif
 const char* log_path = LOG_PATH;
 
-#define HOOK_CTL_NAME   "com.wchen130.hook"
+void record_mode(int fd, int pid) {
+    Entry entries[256];
+    while (1) {
+        unsigned int len = 256 * sizeof(Entry);
+        // Enable Hooker
+        if (setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_ENABLE, &pid, sizeof(pid))) {
+            printf("failed to enable!\n");
+        }
+        
+        char c = getc(stdin);
+        if (c == EOF) {
+            break;
+        }
+        getc(stdin); // read '\n'
+        
+        // Disable Hooker
+        if (setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_DISABLE, NULL, 0)) {
+            printf("failed to diable!\n");
+        }
+        
+        if (getsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_GET_READ, entries, &len)) {
+            printf("failed to get hook data!\n");
+        } else {
+            FILE *fp = fopen(log_path, "a");
+            size_t i = 0;
+            for ( ; i < len / sizeof(Entry); i++) {
+                printf("port: %lu, selector: %d, id: %d\n",
+                       entries[i].connection, entries[i].selector, entries[i].index);
+                fprintf(fp, "{\"port\": %llu, \"selector\": %d, \"id\": %d}\n",
+                        (uint64_t)entries[i].connection, entries[i].selector, entries[i].index);
+            }
+            if (i == 256) {
+                printf("Reach the max capability, please reduce the number of syscall!\n");
+            }
+            fclose(fp);
+        }
+    }
+}
 
-#define SOCKOPT_SET_ENABLE     1
-#define SOCKOPT_SET_DISABLE    2
-#define SOCKOPT_SET_RESET      3
+void listen_mode(int fd, int pid) {
+    if (setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_LISTEN, &pid, sizeof(pid))) {
+        printf("failed to enable!\n");
+        return;
+    }
+    printf("set listen mode\n");
+    
+    char buf[5012];
+    unsigned time = 32;
+    while (time--) {
+        CMD_HEADER* head = (CMD_HEADER*)buf;
+        int n = recv(fd, head, sizeof(CMD_HEADER), MSG_WAITALL);
+        if (n != sizeof(CMD_HEADER)) {
+            printf("recv head failed\n");
+            break;
+        }
+        
+        printf("receive head size: %zu, type: %d\n", head->size, head->type);
+        n = recv(fd, buf+sizeof(CMD_HEADER), head->size, MSG_WAITALL);
+        if (n != head->size) {
+            printf("recv %d, expect %zu\n", n, head->size);
+            break;
+        }
 
-#define SOCKOPT_GET_TEST       1
-#define SOCKOPT_GET_READ       2
-
-typedef struct entry {
-    // externalMethod
-    uint64_t* connection;
-    size_t    inputStructCnt;
-    size_t    outputStructCnt;
-    uint32_t  selector;
-    // function
-    unsigned int index;
-    int pid;
-    unsigned int num_ptr;
-    uint64_t ptrs[16];
-} Entry;
+        switch (head->type) {
+            case HOOK_PRE_EXTERNALMETHOD: {
+                CMD_PRE_EXTERNALMETHOD* cmd = (CMD_PRE_EXTERNALMETHOD*)buf;
+                printf("port: %lu, selector: %u, inputStructSize: %zu, outputStructSize: %zu\n",
+                       cmd->connection, cmd->selector, cmd->inputStructSize, cmd->outputStructSize);
+                break;
+            }
+            case HOOK_POST_EXTERNALMETHOD: {
+                CMD_POST_EXTERNALMETHOD* cmd = (CMD_POST_EXTERNALMETHOD*)buf;
+                printf("outputStructSize: %zu\n", cmd->outputStructSize);
+                break;
+            }
+            case HOOK_ROUNTINE: {
+                CMD_ROUTINE* cmd = (CMD_ROUTINE*)buf;
+                printf("index: %d\n", cmd->index);
+                break;
+            }
+            case HOOK_WITHADDRESSRANGE: {
+                CMD_WITHADDRESSRANGE* cmd = (CMD_WITHADDRESSRANGE*)buf;
+                printf("addr: %lu, size: %zu\n", cmd->addr, cmd->size);
+                break;
+            }
+            default:
+                printf("unknown type: %d\n", head->type);
+                break;
+        }
+    }
+}
 
 int main() {
     struct sockaddr_ctl addr;
@@ -53,7 +123,7 @@ int main() {
     addr.sc_family = AF_SYSTEM;
     addr.ss_sysaddr = AF_SYS_CONTROL;
     
-    int fd = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL);
+    int fd = socket(PF_SYSTEM, SOCK_STREAM, SYSPROTO_CONTROL);
     if (fd == -1) {
         perror("Error with socket\n");
         exit(-1);
@@ -83,56 +153,12 @@ int main() {
 //            printf("%d: 0x%llx\n", i, funcs[i]);
 //        }
 //    }
-    Entry entries[256];
-    while (1) {
-        unsigned int len = 256 * sizeof(Entry);
-        // Enable Hooker
-        if (setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_ENABLE, NULL, 0)) {
-            printf("failed to enable!\n");
-        }
-        
-        char c = getc(stdin);
-        if (c == EOF) {
-            break;
-        }
-        getc(stdin); // read '\n'
-        
-        // Disable Hooker
-        if (setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_DISABLE, NULL, 0)) {
-            printf("failed to diable!\n");
-        }
-        
-        if (getsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_GET_READ, entries, &len)) {
-            printf("failed to get hook data!\n");
-        } else {
-            FILE *fp = fopen(log_path, "a");
-            size_t i = 0;
-            for ( ; i < len / sizeof(Entry); i++) {
-                printf("port: %p, selector: %d, inputStructCnt: %lu, outputStructCnt: %lu, id: %d, pid: %d\n",
-                       entries[i].connection, entries[i].selector, entries[i].inputStructCnt,
-                       entries[i].outputStructCnt, entries[i].index, entries[i].pid);
-                fprintf(fp, "{\"port\": %llu, \"selector\": %d, \"inputStructCnt\": %lu, \"outputStructCnt\": %lu, \"id\": %d, \"pid\": %d, ",
-                        (uint64_t)entries[i].connection, entries[i].selector, entries[i].inputStructCnt,
-                        entries[i].outputStructCnt, entries[i].index, entries[i].pid);
-                fprintf(fp, "\"ptrs\": [");
-                for (unsigned int j = 0; j < entries[i].num_ptr; j++) {
-                    if (j == 0)
-                        fprintf(fp, "%llu", entries[i].ptrs[j]);
-                    else
-                        fprintf(fp, ", %llu", entries[i].ptrs[j]);
-                }
-                fprintf(fp, "]}\n");
-            }
-            if (i == 256) {
-                printf("Reach the max capability, please reduce the number of syscall!\n");
-            }
-            fclose(fp);
-        }
-    }
+    
 //    char buffer[0x100];
 //    if (send(fd, buffer, 0x10, 0) == -1) {
 //        perror("fail to send\n");
 //    }
+    listen_mode(fd, 142);
     
     setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_DISABLE, NULL, 0);
     shutdown(fd, SHUT_RDWR);

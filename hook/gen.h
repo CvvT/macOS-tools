@@ -17,7 +17,7 @@
 
 #define HCI_EXTERNALMETHOD_OFFSET  0x9ad90
 
-uint32_t Offset2WithAddressRange[] = {0x112dd, 0x11c0f, 0x2e78e, 0x2ed9f, 0x3a49c, 0x3b3eb};
+uint32_t Offset2WithAddressRange[] = {0x112dd, 0x11c0f, 0x3b3eb};
 
 DeclareStub(0)
 DeclareStub(1)

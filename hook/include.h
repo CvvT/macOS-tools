@@ -12,25 +12,11 @@
 
 #include <libkern/libkern.h>
 
+#include "common.h"
+
 #define DRIVER_NAME "Hook"
 #define DO_LOG  1
 
-#define MAX_PTR 16
-#define MAX_ENTRY  256
-typedef struct entry {
-    // externalMethod
-    uint64_t* connection;
-    size_t    inputStructCnt;
-    size_t    outputStructCnt;
-    uint32_t  selector;
-    // function
-    unsigned int index;
-    int pid;
-    unsigned int num_ptr;
-    uint64_t ptrs[MAX_PTR];
-} Entry;
-
-Entry entries[MAX_ENTRY];
 
 #define ENCODE_PTR(ptr, size, opt) (ptr | (size << 48) | (opt << 60))
 #define GET_PTR(ptr) (ptr & 0xffffffffffff)
@@ -47,16 +33,33 @@ typedef struct hooker {
     syscall_t hookFunc;
 } Hooker;
 
+// Hook functions
 Hooker gHookers[512] = {0};
 Hooker gExternalMethod = {0};
 Hooker gWithAddressRange = {0};
-volatile unsigned int gEnableHook = 0;
+unsigned gHookMode = HOOK_MODE_NONE;
+
+// controller related (only one process)
+struct kern_ctl_reg gKeCtlReg = {0};
+kern_ctl_ref gKeCtlRef = NULL;
+unsigned int gKeCtrlConnected = 0;
+unsigned int gkeCtlSacUnit = 0;
+int gPid = 0;
 
 #if DO_LOG
 bool gDoLog = true;
 #else
 bool gDoLog = false;
 #endif
+
+void send_routine(unsigned index) {
+    gRoutineCmd.header.type = HOOK_ROUNTINE;
+    gRoutineCmd.header.size = sizeof(CMD_ROUTINE) - sizeof(CMD_HEADER);
+    gRoutineCmd.index = index;
+    if (ctl_enqueuedata(gKeCtlRef, gkeCtlSacUnit, &gRoutineCmd, sizeof(gRoutineCmd), 0)) {
+        printf("enqueue routine error\n");
+    }
+}
 
 #define DeclareStub(ID)                  \
 static long _stub_func_##ID(             \
@@ -66,11 +69,14 @@ static long _stub_func_##ID(             \
     volatile long arg6, volatile long arg7, \
     volatile long arg8, volatile long arg9) \
 {                                           \
-    if (gEnableHook) {                      \
-        if (gDoLog) printf("[%s.kext] function %d is called\n", DRIVER_NAME, ID);  \
-        entries[gLastIndex].index = ID;                                            \
-    }                                                                              \
-    return gHookers[ID].originFunc(arg0, arg1, arg2, arg3, arg4, arg5, arg6,       \
+    if (gPid == proc_selfpid()) {           \
+        if (gDoLog) printf("[%s.kext] function %d is called\n", DRIVER_NAME, ID);      \
+        if (gHookMode == HOOK_MODE_RECORD) {                                           \
+            entries[gLastIndex].index = ID;                                            \
+        } else if (gHookMode == HOOK_MODE_LISTEN)                                      \
+            send_routine(ID);                                                          \
+    }                                                                                  \
+    return gHookers[ID].originFunc(arg0, arg1, arg2, arg3, arg4, arg5, arg6,           \
         arg7, arg8, arg9);  \
 }
 #define GetHookStub(ID) (&_stub_func_##ID)

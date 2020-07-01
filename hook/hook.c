@@ -14,23 +14,16 @@
 #include <sys/proc.h>
 #include <kern/locks.h>
 #include <i386/proc_reg.h>
+#include <IOKit/IOLib.h>
 
-#include "include.h"
 #include "gen.h"
 
 #define TARGET_KEXT     "com.apple.iokit.IOBluetoothFamily"
-#define HOOK_CTL_NAME   "com.wchen130.hook"
 
 kern_return_t hook_start(kmod_info_t * ki, void *d);
 kern_return_t hook_stop(kmod_info_t *ki, void *d);
 
 static kmod_info_t* tgtKext = NULL;
-
-// controller related (only one process)
-struct kern_ctl_reg gKeCtlReg = {0};
-kern_ctl_ref gKeCtlRef = NULL;
-unsigned int gKeCtrlConnected = 0;
-unsigned int gkeCtlSacUnit = 0;
 
 //
 // CR0 and mutex lock
@@ -83,13 +76,6 @@ static void free_mutex() {
     }
 }
 
-#define SOCKOPT_SET_ENABLE     1
-#define SOCKOPT_SET_DISABLE    2
-#define SOCKOPT_SET_RESET      3
-
-#define SOCKOPT_GET_TEST       1
-#define SOCKOPT_GET_READ       2
-
 static errno_t getHookFuncs(void *data, size_t len) {
     if (tgtKext == NULL) {
         return EINVAL;
@@ -110,7 +96,7 @@ static errno_t getHookFuncs(void *data, size_t len) {
 }
 
 static errno_t getHookEntries(void *data, size_t* len) {
-    if (gEnableHook) {
+    if (gHookMode != HOOK_MODE_NONE) {
         printf("[%s.kext] Please disable hooking before get any info to avoid race\n", DRIVER_NAME);
         return EINVAL;
     }
@@ -136,19 +122,18 @@ static long withAddressRangeStub(volatile long arg0, volatile long arg1, volatil
                                  volatile long arg3, volatile long arg4, volatile long arg5,
                                  volatile long arg6, volatile long arg7, volatile long arg8,
                                  volatile long arg9) {
-    if (gEnableHook) {
+    if (gHookMode == HOOK_MODE_LISTEN) {
 #if DO_LOG
         printf("[%s.kext] withAddressRange ptr: 0x%lx, size: %ld, opt: %ld\n", DRIVER_NAME, arg0, arg1, arg2);
 #endif
-        if (entries[gLastIndex].pid == proc_selfpid()) {
-            unsigned int index = entries[gLastIndex].num_ptr;
-            if (index < MAX_PTR) {
-                uint64_t data = ENCODE_PTR(arg0, arg1, arg2);
-                entries[gLastIndex].ptrs[index] = data;
-                entries[gLastIndex].num_ptr = index + 1;
-            } else {
-                printf("[%s.kext] Exceed max capacity for ptr, disable it\n", DRIVER_NAME);
-                gEnableHook = 0;
+        if (gPid == proc_selfpid()) {
+            gWithAddressRangeCmd.header.type = HOOK_WITHADDRESSRANGE;
+            gWithAddressRangeCmd.header.size = __offsetof(CMD_WITHADDRESSRANGE, data) + arg1 - sizeof(CMD_HEADER);
+            gWithAddressRangeCmd.addr = arg0;
+            gWithAddressRangeCmd.size = arg1;
+            if (arg1 < 4096 && copyin(arg0, gWithAddressRangeCmd.data, arg1) == 0) {
+                ctl_enqueuedata(gKeCtlRef, gkeCtlSacUnit, &gWithAddressRangeCmd,
+                                __offsetof(CMD_WITHADDRESSRANGE, data) + arg1, 0);
             }
         }
     }
@@ -164,27 +149,58 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
                                volatile long arg3, volatile long arg4, volatile long arg5,
                                volatile long arg6, volatile long arg7, volatile long arg8,
                                volatile long arg9) {
-    if (gEnableHook) { // action operation
 #if DO_LOG
-        printf("[%s.kext] externalMethod selector: %u\n", DRIVER_NAME, (uint32_t) arg1);
+    printf("[%s.kext] externalMethod selector: %u\n", DRIVER_NAME, (uint32_t) arg1);
 #endif
-        if (gEntryIndex < MAX_ENTRY) {
-            unsigned int index = gLastIndex = gEntryIndex;
-            gEntryIndex++;
-            struct IOExternalMethodArguments *args = (struct IOExternalMethodArguments*) arg2;
-            entries[index].connection = (uint64_t *) arg0;
-            entries[index].selector = (uint32_t) arg1;
-            entries[index].inputStructCnt = args->structureInputSize;
-            entries[index].outputStructCnt = args->structureOutputSize;
-            entries[index].index = -1;
-            entries[index].pid = proc_selfpid();
-        } else {
-            printf("[%s.kext] Exceed max capacity for entry, disable it\n", DRIVER_NAME);
-            gEnableHook = 0;
+    bool skip = proc_selfpid() != gPid;
+    if (!skip) {
+        struct IOExternalMethodArguments *args = (struct IOExternalMethodArguments*) arg2;
+        if (gHookMode == HOOK_MODE_RECORD) { // action operation
+
+            if (gEntryIndex < MAX_ENTRY) {
+                unsigned int index = gLastIndex = gEntryIndex;
+                gEntryIndex++;
+                Entry* entry = &entries[index];
+                entry->connection = arg0;
+                entry->selector = (uint32_t) arg1;
+                entry->index = -1;
+            } else {
+                printf("[%s.kext] Exceed max capacity for entry, disable it\n", DRIVER_NAME);
+                gHookMode = HOOK_MODE_NONE;
+            }
+        } else if (gHookMode == HOOK_MODE_LISTEN) {
+            gPreExternalMethodCmd.header.type = HOOK_PRE_EXTERNALMETHOD;
+            gPreExternalMethodCmd.header.size = __offsetof(CMD_PRE_EXTERNALMETHOD, data) + args->structureInputSize - sizeof(CMD_HEADER);
+            gPreExternalMethodCmd.connection = arg0;
+            gPreExternalMethodCmd.selector   = (uint32_t) arg1;
+            gPreExternalMethodCmd.inputStructSize = args->structureInputSize;
+            gPreExternalMethodCmd.outputStructSize = args->structureOutputSize;
+            
+            if (args->structureInputSize > 0) {
+                memcpy(gPreExternalMethodCmd.data, args->structureInput, args->structureInputSize);
+            }
+            ctl_enqueuedata(gKeCtlRef, gkeCtlSacUnit, &gPreExternalMethodCmd,
+                            __offsetof(CMD_PRE_EXTERNALMETHOD, data) + args->structureInputSize, 0);
         }
     }
-    return gExternalMethod.originFunc(arg0, arg1, arg2, arg3, arg4, arg5, arg6,
+    
+    long ret = gExternalMethod.originFunc(arg0, arg1, arg2, arg3, arg4, arg5, arg6,
                                       arg7, arg8, arg9);
+    
+    if (!skip && gHookMode == HOOK_MODE_LISTEN) {
+        // copy out output
+        struct IOExternalMethodArguments *args = (struct IOExternalMethodArguments*) arg2;
+        gPostExternalMethodCmd.header.type = HOOK_POST_EXTERNALMETHOD;
+        gPostExternalMethodCmd.header.size = __offsetof(CMD_POST_EXTERNALMETHOD, data) + args->structureOutputSize - sizeof(CMD_HEADER);
+        gPostExternalMethodCmd.outputStructSize = args->structureOutputSize;
+        if (args->structureOutputSize > 0) {
+            memcpy(gPostExternalMethodCmd.data, args->structureOutput, args->structureOutputSize);
+            ctl_enqueuedata(gKeCtlRef, gkeCtlSacUnit, &gPostExternalMethodCmd,
+                            __offsetof(CMD_POST_EXTERNALMETHOD, data) + args->structureOutputSize, 0);
+        }
+    }
+    
+    return ret;
 }
 
 static errno_t hook_initialize(vm_address_t base) {
@@ -272,7 +288,7 @@ static void hook_recover() {
 }
 
 static void reset_entry() {
-    bzero(entries, sizeof(Entry) * MAX_ENTRY);
+    bzero(entries, sizeof(Entry) * gEntryIndex);
     gEntryIndex = gLastIndex = 0;
 }
 
@@ -280,18 +296,37 @@ errno_t HookHandleSetOpt(kern_ctl_ref ctlref, unsigned int unit, void *userdata,
 #if DO_LOG
     printf("[%s.kext] call setOpt %d...\n", DRIVER_NAME, opt);
 #endif
-    int error = EINVAL;
+    int error = KERN_INVALID_VALUE;
     switch (opt) {
         case SOCKOPT_SET_ENABLE:
             reset_entry();
-            gEnableHook = 1;
-            return KERN_SUCCESS;
+            gHookMode = HOOK_MODE_RECORD;
+            if (len == 4) {
+                gPid = *(int*)data;
+                return KERN_SUCCESS;
+            }
+            break;
         case SOCKOPT_SET_DISABLE:
-            gEnableHook = 0;
+            gHookMode = HOOK_MODE_NONE;
+            gPid = -1;
             return KERN_SUCCESS;
         case SOCKOPT_SET_RESET:
             reset_entry();
             return KERN_SUCCESS;
+        case SOCKOPT_SET_LISTEN:
+            gHookMode = HOOK_MODE_LISTEN;
+            if (len == 4) {
+                gPid = *(int*)data;
+                return KERN_SUCCESS;
+            }
+            break;
+//        case SOCKOPT_SET_TEST:
+//            gHookMode = HOOK_MODE_TEST;
+//            if (len == 4) {
+//                gPid = *(int*)data;
+//                return KERN_SUCCESS;
+//            }
+//            break;
         default:
             break;
     }
@@ -329,6 +364,8 @@ errno_t HookhandleDisconnect(kern_ctl_ref ctlref, unsigned int unit, void *uniti
 #if DO_LOG
     printf("[%s.kext] call disconnect...\n", DRIVER_NAME);
 #endif
+    gHookMode = HOOK_MODE_NONE;
+    reset_entry();
     gKeCtrlConnected = 0;
     gkeCtlSacUnit = 0;
     return KERN_SUCCESS;
@@ -346,6 +383,7 @@ void kernelControl_register() {
     errno_t err;
     bzero(&gKeCtlReg, sizeof(struct kern_ctl_reg));
     strncpy(gKeCtlReg.ctl_name, HOOK_CTL_NAME, strlen(HOOK_CTL_NAME));
+    gKeCtlReg.ctl_flags      =    CTL_FLAG_REG_SOCK_STREAM;
     gKeCtlReg.ctl_setopt     =    HookHandleSetOpt;
     gKeCtlReg.ctl_getopt     =    HookHandleGetOpt;
     gKeCtlReg.ctl_connect    =    HookHandleConnect;
