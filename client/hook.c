@@ -10,29 +10,9 @@
 #include <sys/kern_control.h>
 #include <sys/kern_event.h>
 
+#include "../hook/common.h"
+
 #define EXPORT __attribute__((visibility("default")))
-
-#define HOOK_CTL_NAME   "com.wchen130.hook"
-
-#define SOCKOPT_SET_ENABLE     1
-#define SOCKOPT_SET_DISABLE    2
-#define SOCKOPT_SET_RESET      3
-
-#define SOCKOPT_GET_TEST       1
-#define SOCKOPT_GET_READ       2
-
-typedef struct entry {
-    // externalMethod
-    uint64_t* connection;
-    size_t    inputStructCnt;
-    size_t    outputStructCnt;
-    uint32_t  selector;
-    // function
-    unsigned int index;
-    int pid;
-    unsigned int num_ptr;
-    uint64_t ptrs[16];
-} Entry;
 
 static int fd = -1;
 static char buffer[512];

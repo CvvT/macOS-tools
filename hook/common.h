@@ -32,6 +32,7 @@ Entry entries[MAX_ENTRY];
 typedef struct {
     size_t size;
     unsigned type;
+    int pid;
 } CMD_HEADER;
 
 typedef struct {
@@ -40,20 +41,20 @@ typedef struct {
     uint32_t   selector;
     size_t     inputStructSize;
     size_t     outputStructSize;
-    char       data[4096];
+    uint8_t    data[4096];
 } CMD_PRE_EXTERNALMETHOD;
 
 typedef struct {
     CMD_HEADER header;
     size_t     outputStructSize;
-    char       data[4096];
+    uint8_t    data[4096];
 } CMD_POST_EXTERNALMETHOD;
 
 typedef struct {
     CMD_HEADER header;
     long       addr;
     size_t     size;
-    char       data[4096];
+    uint8_t    data[4096];
 } CMD_WITHADDRESSRANGE;
 
 typedef struct {
@@ -62,7 +63,7 @@ typedef struct {
 } CMD_ROUTINE;
 
 // Kernel stack size is small, we use global data instead.
-// Make sure no race condition.
+// Assume no data race.
 CMD_PRE_EXTERNALMETHOD   gPreExternalMethodCmd;
 CMD_POST_EXTERNALMETHOD  gPostExternalMethodCmd;
 CMD_WITHADDRESSRANGE     gWithAddressRangeCmd;

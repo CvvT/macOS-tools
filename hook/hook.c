@@ -26,13 +26,6 @@ kern_return_t hook_stop(kmod_info_t *ki, void *d);
 static kmod_info_t* tgtKext = NULL;
 
 //
-// CR0 and mutex lock
-//
-static unsigned long cr0;
-static lck_mtx_t *cr0_lock;
-lck_grp_t *glock_group;
-
-//
 // Disable the write protection bit in CR0 register
 //
 static void disable_write_protection() {
@@ -126,15 +119,21 @@ static long withAddressRangeStub(volatile long arg0, volatile long arg1, volatil
 #if DO_LOG
         printf("[%s.kext] withAddressRange ptr: 0x%lx, size: %ld, opt: %ld\n", DRIVER_NAME, arg0, arg1, arg2);
 #endif
-        if (gPid == proc_selfpid()) {
+        if (gPid == 0 || gPid == proc_selfpid()) {
+            // ensure no data race
+            lck_mtx_lock(cr0_lock);
+            
             gWithAddressRangeCmd.header.type = HOOK_WITHADDRESSRANGE;
             gWithAddressRangeCmd.header.size = __offsetof(CMD_WITHADDRESSRANGE, data) + arg1 - sizeof(CMD_HEADER);
+            gWithAddressRangeCmd.header.pid = proc_selfpid();
             gWithAddressRangeCmd.addr = arg0;
             gWithAddressRangeCmd.size = arg1;
             if (arg1 < 4096 && copyin(arg0, gWithAddressRangeCmd.data, arg1) == 0) {
                 ctl_enqueuedata(gKeCtlRef, gkeCtlSacUnit, &gWithAddressRangeCmd,
                                 __offsetof(CMD_WITHADDRESSRANGE, data) + arg1, 0);
             }
+            
+            lck_mtx_unlock(cr0_lock);
         }
     }
     return gWithAddressRange.originFunc(arg0, arg1, arg2, arg3, arg4, arg5, arg6,
@@ -152,7 +151,7 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
 #if DO_LOG
     printf("[%s.kext] externalMethod selector: %u\n", DRIVER_NAME, (uint32_t) arg1);
 #endif
-    bool skip = proc_selfpid() != gPid;
+    bool skip = (gPid != 0 && proc_selfpid() != gPid);
     if (!skip) {
         struct IOExternalMethodArguments *args = (struct IOExternalMethodArguments*) arg2;
         if (gHookMode == HOOK_MODE_RECORD) { // action operation
@@ -169,8 +168,12 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
                 gHookMode = HOOK_MODE_NONE;
             }
         } else if (gHookMode == HOOK_MODE_LISTEN) {
+            // ensure no data race
+            lck_mtx_lock(cr0_lock);
+            
             gPreExternalMethodCmd.header.type = HOOK_PRE_EXTERNALMETHOD;
             gPreExternalMethodCmd.header.size = __offsetof(CMD_PRE_EXTERNALMETHOD, data) + args->structureInputSize - sizeof(CMD_HEADER);
+            gPreExternalMethodCmd.header.pid = proc_selfpid();
             gPreExternalMethodCmd.connection = arg0;
             gPreExternalMethodCmd.selector   = (uint32_t) arg1;
             gPreExternalMethodCmd.inputStructSize = args->structureInputSize;
@@ -181,6 +184,8 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
             }
             ctl_enqueuedata(gKeCtlRef, gkeCtlSacUnit, &gPreExternalMethodCmd,
                             __offsetof(CMD_PRE_EXTERNALMETHOD, data) + args->structureInputSize, 0);
+            
+            lck_mtx_unlock(cr0_lock);
         }
     }
     
@@ -188,16 +193,21 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
                                       arg7, arg8, arg9);
     
     if (!skip && gHookMode == HOOK_MODE_LISTEN) {
+        lck_mtx_lock(cr0_lock);
+        
         // copy out output
         struct IOExternalMethodArguments *args = (struct IOExternalMethodArguments*) arg2;
         gPostExternalMethodCmd.header.type = HOOK_POST_EXTERNALMETHOD;
         gPostExternalMethodCmd.header.size = __offsetof(CMD_POST_EXTERNALMETHOD, data) + args->structureOutputSize - sizeof(CMD_HEADER);
+        gPostExternalMethodCmd.header.pid = proc_selfpid();
         gPostExternalMethodCmd.outputStructSize = args->structureOutputSize;
         if (args->structureOutputSize > 0) {
             memcpy(gPostExternalMethodCmd.data, args->structureOutput, args->structureOutputSize);
             ctl_enqueuedata(gKeCtlRef, gkeCtlSacUnit, &gPostExternalMethodCmd,
                             __offsetof(CMD_POST_EXTERNALMETHOD, data) + args->structureOutputSize, 0);
         }
+        
+        lck_mtx_unlock(cr0_lock);
     }
     
     return ret;

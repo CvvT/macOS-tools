@@ -17,6 +17,7 @@
 		8C56FFF1248E06BB00B237A6 /* include.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = include.h; sourceTree = "<group>"; };
 		8C56FFF724903AE900B237A6 /* client */ = {isa = PBXFileReference; lastKnownFileType = folder; path = client; sourceTree = "<group>"; };
 		8C56FFF82490CC8A00B237A6 /* gen.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = gen.h; sourceTree = "<group>"; };
+		8C8871A724AC3C61004ED525 /* common.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = common.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -54,6 +55,7 @@
 				8C56FFEB248DFA6300B237A6 /* Info.plist */,
 				8C56FFF1248E06BB00B237A6 /* include.h */,
 				8C56FFF82490CC8A00B237A6 /* gen.h */,
+				8C8871A724AC3C61004ED525 /* common.h */,
 			);
 			path = hook;
 			sourceTree = "<group>";

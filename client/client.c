@@ -63,6 +63,17 @@ void record_mode(int fd, int pid) {
     }
 }
 
+void toList(FILE* fp, uint8_t* data, unsigned size) {
+    fprintf(fp, "[");
+    for (unsigned i = 0; i < size; i++) {
+        if (i == 0)
+            fprintf(fp, "%u", data[i]);
+        else
+            fprintf(fp, ", %u", data[i]);
+    }
+    fprintf(fp, "]");
+}
+
 void listen_mode(int fd, int pid) {
     if (setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_LISTEN, &pid, sizeof(pid))) {
         printf("failed to enable!\n");
@@ -71,8 +82,7 @@ void listen_mode(int fd, int pid) {
     printf("set listen mode\n");
     
     char buf[5012];
-    unsigned time = 32;
-    while (time--) {
+    while (1) {
         CMD_HEADER* head = (CMD_HEADER*)buf;
         int n = recv(fd, head, sizeof(CMD_HEADER), MSG_WAITALL);
         if (n != sizeof(CMD_HEADER)) {
@@ -87,32 +97,45 @@ void listen_mode(int fd, int pid) {
             break;
         }
 
+        FILE *fp = fopen(log_path, "a");
         switch (head->type) {
             case HOOK_PRE_EXTERNALMETHOD: {
                 CMD_PRE_EXTERNALMETHOD* cmd = (CMD_PRE_EXTERNALMETHOD*)buf;
                 printf("port: %lu, selector: %u, inputStructSize: %zu, outputStructSize: %zu\n",
                        cmd->connection, cmd->selector, cmd->inputStructSize, cmd->outputStructSize);
+                fprintf(fp, "{\"port\": %lu, \"selector\": %u, \"inputStructSize\": %zu, \"outputStructSize\": %zu, \"pid\": %d, \"inputStruct\": ",
+                        cmd->connection, cmd->selector, cmd->inputStructSize, cmd->outputStructSize, cmd->header.pid);
+                toList(fp, cmd->data, cmd->inputStructSize);
+                fprintf(fp, "}\n");
                 break;
             }
             case HOOK_POST_EXTERNALMETHOD: {
                 CMD_POST_EXTERNALMETHOD* cmd = (CMD_POST_EXTERNALMETHOD*)buf;
                 printf("outputStructSize: %zu\n", cmd->outputStructSize);
+                fprintf(fp, "{\"outputStructSize\": %zu, \"pid\": %d, \"outputStruct\": ", cmd->outputStructSize, cmd->header.pid);
+                toList(fp, cmd->data, cmd->outputStructSize);
+                fprintf(fp, "}\n");
                 break;
             }
             case HOOK_ROUNTINE: {
                 CMD_ROUTINE* cmd = (CMD_ROUTINE*)buf;
                 printf("index: %d\n", cmd->index);
+                fprintf(fp, "{\"index\": %d, \"pid\": %d}\n", cmd->index, cmd->header.pid);
                 break;
             }
             case HOOK_WITHADDRESSRANGE: {
                 CMD_WITHADDRESSRANGE* cmd = (CMD_WITHADDRESSRANGE*)buf;
                 printf("addr: %lu, size: %zu\n", cmd->addr, cmd->size);
+                fprintf(fp, "{\"addr\": %lu, \"size\": %zu, \"pid\": %d, \"data\": ", cmd->addr, cmd->size, cmd->header.pid);
+                toList(fp, cmd->data, cmd->size);
+                fprintf(fp, "}\n");
                 break;
             }
             default:
                 printf("unknown type: %d\n", head->type);
                 break;
         }
+        fclose(fp);
     }
 }
 
@@ -142,6 +165,7 @@ int main() {
     int rc = connect(fd, (struct sockaddr*)&addr, sizeof(addr));
     if (rc) {
         printf("connect failed %d\n", rc);
+        perror("connect faield\n");
         exit(-1);
     }
     
@@ -158,7 +182,8 @@ int main() {
 //    if (send(fd, buffer, 0x10, 0) == -1) {
 //        perror("fail to send\n");
 //    }
-    listen_mode(fd, 142);
+//    listen_mode(fd, 142);
+    listen_mode(fd, 0);
     
     setsockopt(fd, SYSPROTO_CONTROL, SOCKOPT_SET_DISABLE, NULL, 0);
     shutdown(fd, SHUT_RDWR);

@@ -10,12 +10,12 @@
 #ifndef include_h
 #define include_h
 
-#include <libkern/libkern.h>
+//#include <libkern/libkern.h>
 
 #include "common.h"
 
 #define DRIVER_NAME "Hook"
-#define DO_LOG  1
+#define DO_LOG  0
 
 
 #define ENCODE_PTR(ptr, size, opt) (ptr | (size << 48) | (opt << 60))
@@ -26,6 +26,13 @@
 // FIXME: How to deal with multi threads
 unsigned int gEntryIndex = 0;
 unsigned int gLastIndex = 0;
+
+//
+// CR0 and mutex lock
+//
+unsigned long cr0;
+lck_mtx_t *cr0_lock;
+lck_grp_t *glock_group;
 
 typedef intptr_t(*syscall_t)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t);
 typedef struct hooker {
@@ -44,7 +51,7 @@ struct kern_ctl_reg gKeCtlReg = {0};
 kern_ctl_ref gKeCtlRef = NULL;
 unsigned int gKeCtrlConnected = 0;
 unsigned int gkeCtlSacUnit = 0;
-int gPid = 0;
+int gPid = -1;
 
 #if DO_LOG
 bool gDoLog = true;
@@ -53,12 +60,18 @@ bool gDoLog = false;
 #endif
 
 void send_routine(unsigned index) {
+    // ensure no data race
+    lck_mtx_lock(cr0_lock);
+    
     gRoutineCmd.header.type = HOOK_ROUNTINE;
     gRoutineCmd.header.size = sizeof(CMD_ROUTINE) - sizeof(CMD_HEADER);
+    gRoutineCmd.header.pid = proc_selfpid();
     gRoutineCmd.index = index;
     if (ctl_enqueuedata(gKeCtlRef, gkeCtlSacUnit, &gRoutineCmd, sizeof(gRoutineCmd), 0)) {
         printf("enqueue routine error\n");
     }
+    
+    lck_mtx_unlock(cr0_lock);
 }
 
 #define DeclareStub(ID)                  \
@@ -69,7 +82,7 @@ static long _stub_func_##ID(             \
     volatile long arg6, volatile long arg7, \
     volatile long arg8, volatile long arg9) \
 {                                           \
-    if (gPid == proc_selfpid()) {           \
+    if (gPid == 0 || gPid == proc_selfpid()) {           \
         if (gDoLog) printf("[%s.kext] function %d is called\n", DRIVER_NAME, ID);      \
         if (gHookMode == HOOK_MODE_RECORD) {                                           \
             entries[gLastIndex].index = ID;                                            \
