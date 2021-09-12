@@ -39,13 +39,20 @@ typedef struct {
     CMD_HEADER header;
     long       connection;
     uint32_t   selector;
-    size_t     inputStructSize;
+    
+    uint32_t   scalarOutputCount;
     size_t     outputStructSize;
+    
+    uint32_t   scalarInputCount;
+    uint64_t   scalarInput[6];
+    size_t     inputStructSize;
     uint8_t    data[4096];
 } CMD_PRE_EXTERNALMETHOD;
 
 typedef struct {
     CMD_HEADER header;
+    uint32_t   scalarOutputCount;
+    uint64_t   scalarOutput[8];
     size_t     outputStructSize;
     uint8_t    data[4096];
 } CMD_POST_EXTERNALMETHOD;
@@ -57,17 +64,11 @@ typedef struct {
     uint8_t    data[4096];
 } CMD_WITHADDRESSRANGE;
 
-typedef struct {
-    CMD_HEADER header;
-    unsigned   index;
-} CMD_ROUTINE;
-
 // Kernel stack size is small, we use global data instead.
 // Assume no data race.
 CMD_PRE_EXTERNALMETHOD   gPreExternalMethodCmd;
 CMD_POST_EXTERNALMETHOD  gPostExternalMethodCmd;
 CMD_WITHADDRESSRANGE     gWithAddressRangeCmd;
-CMD_ROUTINE              gRoutineCmd;
 
 #define SOCKOPT_SET_ENABLE     1
 #define SOCKOPT_SET_DISABLE    2

@@ -41,7 +41,6 @@ typedef struct hooker {
 } Hooker;
 
 // Hook functions
-Hooker gHookers[512] = {0};
 Hooker gExternalMethod = {0};
 Hooker gWithAddressRange = {0};
 unsigned gHookMode = HOOK_MODE_NONE;
@@ -58,42 +57,6 @@ bool gDoLog = true;
 #else
 bool gDoLog = false;
 #endif
-
-void send_routine(unsigned index) {
-    // ensure no data race
-    lck_mtx_lock(cr0_lock);
-    
-    gRoutineCmd.header.type = HOOK_ROUNTINE;
-    gRoutineCmd.header.size = sizeof(CMD_ROUTINE) - sizeof(CMD_HEADER);
-    gRoutineCmd.header.pid = proc_selfpid();
-    gRoutineCmd.index = index;
-    if (ctl_enqueuedata(gKeCtlRef, gkeCtlSacUnit, &gRoutineCmd, sizeof(gRoutineCmd), 0)) {
-        printf("enqueue routine error\n");
-    }
-    
-    lck_mtx_unlock(cr0_lock);
-}
-
-#define DeclareStub(ID)                  \
-static long _stub_func_##ID(             \
-    volatile long arg0, volatile long arg1, \
-    volatile long arg2, volatile long arg3, \
-    volatile long arg4, volatile long arg5, \
-    volatile long arg6, volatile long arg7, \
-    volatile long arg8, volatile long arg9) \
-{                                           \
-    if (gPid == 0 || gPid == proc_selfpid()) {           \
-        if (gDoLog) printf("[%s.kext] function %d is called\n", DRIVER_NAME, ID);      \
-        if (gHookMode == HOOK_MODE_RECORD) {                                           \
-            entries[gLastIndex].index = ID;                                            \
-        } else if (gHookMode == HOOK_MODE_LISTEN)                                      \
-            send_routine(ID);                                                          \
-    }                                                                                  \
-    return gHookers[ID].originFunc(arg0, arg1, arg2, arg3, arg4, arg5, arg6,           \
-        arg7, arg8, arg9);  \
-}
-#define GetHookStub(ID) (&_stub_func_##ID)
-#define RegisterStub(ID) gHookers[ID].hookFunc = GetHookStub(ID)
 
 //
 // Enable and disable interrupts

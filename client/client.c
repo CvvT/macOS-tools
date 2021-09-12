@@ -80,6 +80,7 @@ void listen_mode(int fd, int pid) {
         return;
     }
     printf("set listen mode\n");
+    printf("output file: /tmp/kernel_hook.txt\n");
     
     char buf[5012];
     while (1) {
@@ -101,26 +102,24 @@ void listen_mode(int fd, int pid) {
         switch (head->type) {
             case HOOK_PRE_EXTERNALMETHOD: {
                 CMD_PRE_EXTERNALMETHOD* cmd = (CMD_PRE_EXTERNALMETHOD*)buf;
-                printf("port: %lu, selector: %u, inputStructSize: %zu, outputStructSize: %zu\n",
-                       cmd->connection, cmd->selector, cmd->inputStructSize, cmd->outputStructSize);
+                printf("port: %lu, selector: %u, inputStructSize: %zu, outputStructSize: %zu, scalarInputCnt: %u, sclarOutputCnt: %u\n",
+                       cmd->connection, cmd->selector, cmd->inputStructSize, cmd->outputStructSize, cmd->scalarInputCount, cmd->scalarOutputCount);
                 fprintf(fp, "{\"port\": %lu, \"selector\": %u, \"inputStructSize\": %zu, \"outputStructSize\": %zu, \"pid\": %d, \"inputStruct\": ",
                         cmd->connection, cmd->selector, cmd->inputStructSize, cmd->outputStructSize, cmd->header.pid);
                 toList(fp, cmd->data, cmd->inputStructSize);
+                fprintf(fp, ", \"scalarInputCnt\": %u, \"scalarOutputCnt\": %u, \"scalarInput\": ", cmd->scalarInputCount, cmd->scalarOutputCount);
+                toList(fp, (uint8_t*)&cmd->scalarInput[0], cmd->scalarInputCount*sizeof(uint64_t));
                 fprintf(fp, "}\n");
                 break;
             }
             case HOOK_POST_EXTERNALMETHOD: {
                 CMD_POST_EXTERNALMETHOD* cmd = (CMD_POST_EXTERNALMETHOD*)buf;
-                printf("outputStructSize: %zu\n", cmd->outputStructSize);
+                printf("outputStructSize: %zu, scalarOutputCount: %u\n", cmd->outputStructSize, cmd->scalarOutputCount);
                 fprintf(fp, "{\"outputStructSize\": %zu, \"pid\": %d, \"outputStruct\": ", cmd->outputStructSize, cmd->header.pid);
                 toList(fp, cmd->data, cmd->outputStructSize);
+                fprintf(fp, ", \"scalarOutputCount\": %u, \"scalarOutput\": ", cmd->scalarOutputCount);
+                toList(fp, (uint8_t*)&cmd->scalarOutput[0], cmd->scalarOutputCount*sizeof(uint64_t));
                 fprintf(fp, "}\n");
-                break;
-            }
-            case HOOK_ROUNTINE: {
-                CMD_ROUTINE* cmd = (CMD_ROUTINE*)buf;
-                printf("index: %d\n", cmd->index);
-                fprintf(fp, "{\"index\": %d, \"pid\": %d}\n", cmd->index, cmd->header.pid);
                 break;
             }
             case HOOK_WITHADDRESSRANGE: {

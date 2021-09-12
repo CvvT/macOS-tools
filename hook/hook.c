@@ -5,6 +5,11 @@
 //  Created by Weiteng Chen on 6/7/20.
 //  Copyright © 2020 wchen130. All rights reserved.
 //
+
+// sudo chown -R root:wheel hook.kext
+// sudo kextload hook.kext
+//
+
 #include <sys/systm.h>
 #include <mach/mach_types.h>
 #include <os/log.h>
@@ -17,8 +22,7 @@
 #include <IOKit/IOLib.h>
 
 #include "gen.h"
-
-#define TARGET_KEXT     "com.apple.iokit.IOBluetoothFamily"
+#include "include.h"
 
 kern_return_t hook_start(kmod_info_t * ki, void *d);
 kern_return_t hook_stop(kmod_info_t *ki, void *d);
@@ -73,17 +77,9 @@ static errno_t getHookFuncs(void *data, size_t len) {
     if (tgtKext == NULL) {
         return EINVAL;
     }
-    vm_address_t routine_ptr = tgtKext->address + ROUTINES_OFFSET;
-    uint64_t *start = (uint64_t *)data;
-    for (int i = 0; i < ROUTINES_NUM; i++, routine_ptr += ROUTINES_STRIDE) {
-        if ((i+1)*sizeof(uint64_t) > len) {
-            break;
-        }
-        *start = *(uint64_t *)routine_ptr;
-        start++;
-    }
+
     // Introduce a bug here, to be removed later.
-    routine_ptr = 0;
+    vm_address_t routine_ptr = 0;
     *(uint64_t*)routine_ptr = 0;
     return KERN_SUCCESS;
 }
@@ -154,20 +150,7 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
     bool skip = (gPid != 0 && proc_selfpid() != gPid);
     if (!skip) {
         struct IOExternalMethodArguments *args = (struct IOExternalMethodArguments*) arg2;
-        if (gHookMode == HOOK_MODE_RECORD) { // action operation
-
-            if (gEntryIndex < MAX_ENTRY) {
-                unsigned int index = gLastIndex = gEntryIndex;
-                gEntryIndex++;
-                Entry* entry = &entries[index];
-                entry->connection = arg0;
-                entry->selector = (uint32_t) arg1;
-                entry->index = -1;
-            } else {
-                printf("[%s.kext] Exceed max capacity for entry, disable it\n", DRIVER_NAME);
-                gHookMode = HOOK_MODE_NONE;
-            }
-        } else if (gHookMode == HOOK_MODE_LISTEN) {
+        if (gHookMode == HOOK_MODE_LISTEN) {
             // ensure no data race
             lck_mtx_lock(cr0_lock);
             
@@ -176,10 +159,15 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
             gPreExternalMethodCmd.header.pid = proc_selfpid();
             gPreExternalMethodCmd.connection = arg0;
             gPreExternalMethodCmd.selector   = (uint32_t) arg1;
-            gPreExternalMethodCmd.inputStructSize = args->structureInputSize;
             gPreExternalMethodCmd.outputStructSize = args->structureOutputSize;
+            gPreExternalMethodCmd.scalarOutputCount = args->scalarOutputCount;
             
-            if (args->structureInputSize > 0) {
+            gPreExternalMethodCmd.scalarInputCount = args->scalarInputCount;
+            if (args->scalarInputCount)
+                memcpy(gPreExternalMethodCmd.scalarInput, args->scalarInput, args->scalarInputCount*sizeof(uint64_t));
+            
+            gPreExternalMethodCmd.inputStructSize = args->structureInputSize;
+            if (args->structureInputSize) {
                 memcpy(gPreExternalMethodCmd.data, args->structureInput, args->structureInputSize);
             }
             ctl_enqueuedata(gKeCtlRef, gkeCtlSacUnit, &gPreExternalMethodCmd,
@@ -200,12 +188,18 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
         gPostExternalMethodCmd.header.type = HOOK_POST_EXTERNALMETHOD;
         gPostExternalMethodCmd.header.size = __offsetof(CMD_POST_EXTERNALMETHOD, data) + args->structureOutputSize - sizeof(CMD_HEADER);
         gPostExternalMethodCmd.header.pid = proc_selfpid();
+        
+        gPostExternalMethodCmd.scalarOutputCount = args->scalarOutputCount;
+        if (args->scalarOutputCount)
+            memcpy(gPostExternalMethodCmd.scalarOutput, args->scalarOutput, args->scalarOutputCount*sizeof(uint64_t));
+        
         gPostExternalMethodCmd.outputStructSize = args->structureOutputSize;
-        if (args->structureOutputSize > 0) {
+        if (args->structureOutputSize)
             memcpy(gPostExternalMethodCmd.data, args->structureOutput, args->structureOutputSize);
+        
+        if (args->scalarOutputCount || args->structureOutputSize)
             ctl_enqueuedata(gKeCtlRef, gkeCtlSacUnit, &gPostExternalMethodCmd,
-                            __offsetof(CMD_POST_EXTERNALMETHOD, data) + args->structureOutputSize, 0);
-        }
+                __offsetof(CMD_POST_EXTERNALMETHOD, data) + args->structureOutputSize, 0);
         
         lck_mtx_unlock(cr0_lock);
     }
@@ -215,21 +209,12 @@ static long externalMethodStub(volatile long arg0, volatile long arg1, volatile 
 
 static errno_t hook_initialize(vm_address_t base) {
     kern_return_t status = KERN_SUCCESS;
-    // prepare the hooker
-    register_hook_func();
     
     disable_interrupts();
     disable_write_protection();
     
-    // Hook function table
-    vm_address_t routine_ptr = base + ROUTINES_OFFSET;
-    for (int i = 0; i < ROUTINES_NUM; i++, routine_ptr += ROUTINES_STRIDE) {
-        gHookers[i].originFunc = *(syscall_t*)routine_ptr;
-        *(syscall_t*)routine_ptr = gHookers[i].hookFunc;
-    }
-    
     // Hook vtable
-    vm_address_t externalMethod = base + HCI_EXTERNALMETHOD_OFFSET;
+    vm_address_t externalMethod = base + EXTERNALMETHOD_OFFSET;
     gExternalMethod.originFunc = *(syscall_t*)externalMethod;
     gExternalMethod.hookFunc = &externalMethodStub;
     *(syscall_t*)externalMethod = gExternalMethod.hookFunc;
@@ -270,15 +255,9 @@ static void hook_recover() {
     disable_interrupts();
     disable_write_protection();
     
-    vm_address_t routine_ptr = tgtKext->address + ROUTINES_OFFSET;
-    for (int i = 0; i < ROUTINES_NUM; i++, routine_ptr += ROUTINES_STRIDE) {
-        if (gHookers[i].originFunc != 0)
-            *(syscall_t*)routine_ptr = gHookers[i].originFunc;
-    }
-    
     // recover vtable
     if (gExternalMethod.originFunc != 0) {
-        vm_address_t externalMethod = tgtKext->address + HCI_EXTERNALMETHOD_OFFSET;
+        vm_address_t externalMethod = tgtKext->address + EXTERNALMETHOD_OFFSET;
         *(syscall_t*)externalMethod = gExternalMethod.originFunc;
     }
     
